@@ -1,0 +1,135 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ArchMap, system map</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="app">
+      <div class="topbar">
+        <div class="brand"><div class="brand-mark"></div><div><div>ArchMap</div><div class="brand-sub">Repository: storefront-platform</div></div></div>
+        <div class="top-actions"><input class="search" value="Search modules, seams, files..." /><button class="btn">Filters</button><button class="btn primary">Analyze latest commit</button></div>
+      </div>
+
+      <div class="layout">
+        <aside class="sidebar">
+          <p class="section-title">Navigation</p>
+          <div class="nav-list">
+            <div class="nav-item active">Architecture map</div>
+            <div class="nav-item">Modules</div>
+            <div class="nav-item">Seams</div>
+            <div class="nav-item">Violations</div>
+            <div class="nav-item">Snapshots</div>
+          </div>
+
+          <div class="divider"></div>
+          <p class="section-title">Project health</p>
+          <div class="stat-grid">
+            <div class="stat"><div class="label">Modules</div><div class="value">12</div></div>
+            <div class="stat"><div class="label">Seams</div><div class="value">31</div></div>
+            <div class="stat"><div class="label">Violations</div><div class="value">7</div></div>
+            <div class="stat"><div class="label">Risk score</div><div class="value">68</div></div>
+          </div>
+
+          <div class="divider"></div>
+          <p class="section-title">Legend</p>
+          <div class="legend-list">
+            <div class="line-item"><span>Blue edge</span><span class="pill blue">import seam</span></div>
+            <div class="line-item"><span>Green edge</span><span class="pill green">event seam</span></div>
+            <div class="line-item"><span>Yellow edge</span><span class="pill yellow">risk hotspot</span></div>
+          </div>
+        </aside>
+
+        <main class="main">
+          <div class="canvas">
+            <div class="map-toolbar">
+              <div class="toolbar-group"><div class="toolchip">View: module map</div><div class="toolchip">Layout: force + layered</div><div class="toolchip">Risk overlay: on</div></div>
+              <div class="toolbar-group"><div class="toolchip">Zoom 78%</div><div class="toolchip">Show seams</div></div>
+            </div>
+
+            <div class="edge" style="left:210px; top:182px; width:180px; transform:rotate(10deg);"></div>
+            <div class="edge soft" style="left:340px; top:278px; width:220px; transform:rotate(8deg);"></div>
+            <div class="edge warn" style="left:494px; top:160px; width:210px; transform:rotate(26deg);"></div>
+            <div class="edge" style="left:238px; top:360px; width:240px; transform:rotate(-12deg);"></div>
+            <div class="edge soft" style="left:510px; top:340px; width:190px; transform:rotate(-18deg);"></div>
+            <div class="edge" style="left:660px; top:280px; width:150px; transform:rotate(18deg);"></div>
+
+            <div class="node" style="left:80px; top:130px; width:190px;">
+              <div class="row"><div class="title">Web App</div><span class="pill blue">entry</span></div>
+              <div class="meta">12 files, Next.js routes</div>
+              <div class="metrics"><span class="pill">fan out 4</span><span class="pill green">healthy</span></div>
+            </div>
+
+            <div class="node highlight" style="left:320px; top:190px; width:210px;">
+              <div class="row"><div class="title">Catalog</div><span class="pill yellow">hotspot</span></div>
+              <div class="meta">26 files, products, search, pricing</div>
+              <div class="metrics"><span class="pill">fan in 7</span><span class="pill red">2 violations</span></div>
+            </div>
+
+            <div class="node" style="left:620px; top:105px; width:200px;">
+              <div class="row"><div class="title">Checkout</div><span class="pill">core</span></div>
+              <div class="meta">18 files, payment flow</div>
+              <div class="metrics"><span class="pill">fan in 5</span><span class="pill yellow">coupled</span></div>
+            </div>
+
+            <div class="node" style="left:140px; top:360px; width:205px;">
+              <div class="row"><div class="title">Customer</div><span class="pill">domain</span></div>
+              <div class="meta">14 files, profile and auth</div>
+              <div class="metrics"><span class="pill">fan out 2</span><span class="pill green">stable</span></div>
+            </div>
+
+            <div class="node" style="left:470px; top:330px; width:205px;">
+              <div class="row"><div class="title">Inventory</div><span class="pill">service</span></div>
+              <div class="meta">11 files, stock sync</div>
+              <div class="metrics"><span class="pill">event seam</span><span class="pill green">clean</span></div>
+            </div>
+
+            <div class="node" style="left:730px; top:300px; width:190px;">
+              <div class="row"><div class="title">Analytics</div><span class="pill">infra</span></div>
+              <div class="meta">9 files, trackers and sinks</div>
+              <div class="metrics"><span class="pill">fan in 6</span><span class="pill">shared</span></div>
+            </div>
+          </div>
+        </main>
+
+        <aside class="inspector">
+          <p class="section-title">Selected module</p>
+          <h2>Catalog</h2>
+          <p class="muted">Owns product discovery, product detail composition, pricing access, and search-related orchestration.</p>
+          <div class="row" style="margin-top:16px;"><span class="pill yellow">Risk score 74</span><span class="pill red">2 violations</span></div>
+
+          <div class="divider"></div>
+          <p class="section-title">Architecture health</p>
+          <div class="list-tight">
+            <div class="line-item"><span>Boundary clarity</span><span>Medium</span></div>
+            <div class="progress"><span style="width:64%"></span></div>
+            <div class="line-item"><span>Cohesion</span><span>High</span></div>
+            <div class="progress"><span style="width:82%"></span></div>
+            <div class="line-item"><span>Coupling</span><span>Elevated</span></div>
+            <div class="progress"><span style="width:71%"></span></div>
+          </div>
+
+          <div class="divider"></div>
+          <p class="section-title">Key seams</p>
+          <div class="risk-list">
+            <div class="risk-item"><div class="row"><strong>Catalog → Checkout</strong><span class="pill yellow">import</span></div><div class="muted">Pricing and cart preparation cross the boundary 8 times.</div></div>
+            <div class="risk-item"><div class="row"><strong>Catalog → Inventory</strong><span class="pill green">event</span></div><div class="muted">Availability updates flow through a clean domain event seam.</div></div>
+          </div>
+
+          <div class="divider"></div>
+          <p class="section-title">Contains</p>
+          <div class="list-tight">
+            <div class="line-item"><span>Routes</span><span>4</span></div>
+            <div class="line-item"><span>Components</span><span>11</span></div>
+            <div class="line-item"><span>Services</span><span>5</span></div>
+            <div class="line-item"><span>Stores</span><span>2</span></div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

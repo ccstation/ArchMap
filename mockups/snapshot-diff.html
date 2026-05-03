@@ -1,0 +1,71 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ArchMap, snapshot diff</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="app">
+      <div class="topbar">
+        <div class="brand"><div class="brand-mark"></div><div><div>ArchMap</div><div class="brand-sub">Architecture drift and snapshot review</div></div></div>
+        <div class="top-actions"><button class="btn">Compare snapshots</button><button class="btn primary">Share review</button></div>
+      </div>
+
+      <div class="main">
+        <div class="hero">
+          <div class="card hero-card">
+            <p class="section-title">Diff summary</p>
+            <h2 style="margin:0 0 12px; font-size:34px;">Architecture changes from <span class="muted">a31d9c</span> to <span class="muted">e52f14</span></h2>
+            <p class="muted" style="line-height:1.7; max-width:760px;">The latest change introduces a new pricing seam between Catalog and Checkout, but also adds one new direct import that bypasses the Inventory boundary.</p>
+            <div class="kpi-row">
+              <div class="stat"><div class="label">New modules</div><div class="value">1</div></div>
+              <div class="stat"><div class="label">Changed seams</div><div class="value">5</div></div>
+              <div class="stat"><div class="label">New violations</div><div class="value">1</div></div>
+              <div class="stat"><div class="label">Risk delta</div><div class="value">+4</div></div>
+            </div>
+          </div>
+
+          <div class="card hero-card">
+            <p class="section-title">Review notes</p>
+            <div class="timeline">
+              <div class="snapshot-item"><strong>Improvement</strong><div class="muted">Checkout now depends on a thinner pricing seam.</div></div>
+              <div class="snapshot-item"><strong>Regression</strong><div class="muted">Inventory internals are imported directly by order-sync.ts.</div></div>
+              <div class="snapshot-item"><strong>Recommendation</strong><div class="muted">Block merge unless the new inventory access is routed through the stock facade.</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns: 0.95fr 1.05fr; gap:22px; margin-top:22px;">
+          <div class="card" style="min-height:560px;">
+            <div class="row"><p class="section-title" style="margin:0;">Snapshot timeline</p><span class="pill blue">4 saved snapshots</span></div>
+            <div class="snapshot-list" style="margin-top:14px;">
+              <div class="snapshot-item"><div class="row"><strong>e52f14</strong><span class="pill yellow">current</span></div><div class="muted">Added pricing seam and one new violation.</div></div>
+              <div class="snapshot-item"><div class="row"><strong>d107aa</strong><span class="pill">previous</span></div><div class="muted">Inventory cleanup reduced coupling.</div></div>
+              <div class="snapshot-item"><div class="row"><strong>c824ce</strong><span class="pill">baseline</span></div><div class="muted">Catalog split from customer concerns.</div></div>
+              <div class="snapshot-item"><div class="row"><strong>a31d9c</strong><span class="pill">compare</span></div><div class="muted">Pre-refactor system architecture.</div></div>
+            </div>
+          </div>
+
+          <div class="card" style="min-height:560px;">
+            <div class="row"><p class="section-title" style="margin:0;">Changed seams map</p><span class="pill red">1 new violation</span></div>
+            <div class="canvas" style="height:500px; margin-top:14px;">
+              <div class="edge soft" style="left:170px; top:160px; width:240px; transform:rotate(8deg);"></div>
+              <div class="edge warn" style="left:370px; top:150px; width:190px; transform:rotate(18deg);"></div>
+              <div class="edge" style="left:250px; top:315px; width:260px; transform:rotate(-10deg);"></div>
+
+              <div class="node" style="left:70px; top:120px; width:180px;"><div class="title">Catalog</div><div class="meta">pricing seam improved</div><div class="metrics"><span class="pill green">better boundary</span></div></div>
+              <div class="node highlight" style="left:330px; top:135px; width:185px;"><div class="title">Checkout</div><div class="meta">new facade adopted</div><div class="metrics"><span class="pill blue">changed</span></div></div>
+              <div class="node" style="left:585px; top:210px; width:180px;"><div class="title">Inventory</div><div class="meta">direct import added</div><div class="metrics"><span class="pill red">regression</span></div></div>
+              <div class="node" style="left:210px; top:330px; width:180px;"><div class="title">Order Sync</div><div class="meta">integration worker</div><div class="metrics"><span class="pill yellow">changed</span></div></div>
+              <div class="node" style="left:520px; top:340px; width:170px;"><div class="title">Analytics</div><div class="meta">unchanged</div><div class="metrics"><span class="pill">stable</span></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

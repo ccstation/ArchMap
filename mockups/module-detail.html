@@ -1,0 +1,87 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ArchMap, module deep dive</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="app">
+      <div class="topbar">
+        <div class="brand"><div class="brand-mark"></div><div><div>ArchMap</div><div class="brand-sub">Module deep dive, Catalog</div></div></div>
+        <div class="top-actions"><button class="btn">Back to map</button><button class="btn primary">Export module report</button></div>
+      </div>
+
+      <div class="main">
+        <div class="hero">
+          <div class="card hero-card">
+            <p class="section-title">Module summary</p>
+            <h2 style="margin:0 0 12px; font-size:34px;">Catalog</h2>
+            <p class="muted" style="line-height:1.7; max-width:760px;">Catalog owns product discovery and retrieval, including listing pages, detail composition, pricing lookups, search queries, and availability orchestration. It is a core business module with high fan-in and moderate boundary leakage into Checkout.</p>
+            <div class="kpi-row">
+              <div class="stat"><div class="label">Files</div><div class="value">26</div></div>
+              <div class="stat"><div class="label">Public APIs</div><div class="value">8</div></div>
+              <div class="stat"><div class="label">Inbound seams</div><div class="value">7</div></div>
+              <div class="stat"><div class="label">Violations</div><div class="value">2</div></div>
+            </div>
+          </div>
+
+          <div class="card hero-card">
+            <p class="section-title">Architecture health</p>
+            <div class="list-tight" style="margin-top:6px;">
+              <div class="line-item"><span>Boundary depth</span><span>Strong</span></div>
+              <div class="progress"><span style="width:80%"></span></div>
+              <div class="line-item"><span>Interface size</span><span>Moderate</span></div>
+              <div class="progress"><span style="width:58%"></span></div>
+              <div class="line-item"><span>Internal cohesion</span><span>High</span></div>
+              <div class="progress"><span style="width:84%"></span></div>
+              <div class="line-item"><span>Boundary leakage</span><span>Elevated</span></div>
+              <div class="progress"><span style="width:69%"></span></div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1.1fr 0.9fr; gap:22px; margin-top:22px;">
+          <div class="card" style="min-height:560px;">
+            <div class="row"><p class="section-title" style="margin:0;">Contained structure</p><span class="pill blue">Drill-down view</span></div>
+            <div class="canvas" style="height:500px; margin-top:14px;">
+              <div class="edge" style="left:180px; top:145px; width:200px; transform:rotate(16deg);"></div>
+              <div class="edge soft" style="left:220px; top:260px; width:180px; transform:rotate(-8deg);"></div>
+              <div class="edge warn" style="left:390px; top:130px; width:140px; transform:rotate(18deg);"></div>
+
+              <div class="node highlight" style="left:70px; top:100px; width:180px;"><div class="title">catalog/routes</div><div class="meta">entry points</div><div class="metrics"><span class="pill">4 routes</span></div></div>
+              <div class="node" style="left:280px; top:150px; width:190px;"><div class="title">catalog/services</div><div class="meta">product lookup, pricing, search</div><div class="metrics"><span class="pill">5 services</span></div></div>
+              <div class="node" style="left:510px; top:95px; width:160px;"><div class="title">checkout bridge</div><div class="meta">cross-module touchpoint</div><div class="metrics"><span class="pill red">leak</span></div></div>
+              <div class="node" style="left:180px; top:300px; width:180px;"><div class="title">catalog/ui</div><div class="meta">11 components</div><div class="metrics"><span class="pill">view layer</span></div></div>
+              <div class="node" style="left:410px; top:275px; width:180px;"><div class="title">catalog/store</div><div class="meta">2 stores</div><div class="metrics"><span class="pill green">cohesive</span></div></div>
+            </div>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:22px;">
+            <div class="card">
+              <p class="section-title">Public surface</p>
+              <div class="module-list">
+                <div class="module-item active"><div class="row"><span>getProductDetail</span><span class="pill">service</span></div></div>
+                <div class="module-item"><div class="row"><span>searchCatalog</span><span class="pill">service</span></div></div>
+                <div class="module-item"><div class="row"><span>ProductPageRoute</span><span class="pill">route</span></div></div>
+                <div class="module-item"><div class="row"><span>ProductCard</span><span class="pill">ui</span></div></div>
+              </div>
+            </div>
+
+            <div class="card">
+              <p class="section-title">Risks and opportunities</p>
+              <div class="risk-list">
+                <div class="risk-item"><div class="row"><strong>Checkout coupling</strong><span class="pill yellow">medium</span></div><div class="muted">Checkout imports pricing internals instead of using a stable seam.</div></div>
+                <div class="risk-item"><div class="row"><strong>Good depth</strong><span class="pill green">positive</span></div><div class="muted">Search complexity is hidden behind a relatively small public interface.</div></div>
+                <div class="risk-item"><div class="row"><strong>Suggested action</strong><span class="pill blue">refactor</span></div><div class="muted">Create a pricing facade seam between Catalog and Checkout.</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
