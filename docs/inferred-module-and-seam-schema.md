@@ -244,11 +244,14 @@ A seam is a promoted, meaningful boundary interaction.
   "thresholds": {
     "moduleCandidate": 60,
     "surfaceVisibility": 75,
+    "visibilityCollapseBelow": 50,
     "seamPromotion": 65,
     "noiseSuppression": 60
   }
 }
 ```
+
+`visibilityCollapseBelow` is compared to each element’s `surfaceVisibilityScore`; when the score is **strictly below** this value, set `visibility.collapsedByDefault` to true. `surfaceVisibility` (75) is the high-prominence band for top-level views, not the collapse line.
 
 ## Notes on overrides
 User changes should not erase inference evidence.

@@ -242,6 +242,7 @@ This improves trust and makes manual correction easier.
 For an initial prototype:
 - module candidate threshold: 60
 - top-level visibility threshold: 75
+- visibility collapse threshold: 50 (`visibilityCollapseBelow` in analysis metadata; elements with surface visibility score strictly below this are collapsed by default)
 - seam promotion threshold: 65
 - noise suppression threshold: 60
 

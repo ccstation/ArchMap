@@ -1,0 +1,60 @@
+---
+description: Next.js 16 caching patterns and conventions for this project.
+globs:
+  - "apps/web/app/**/*.tsx"
+  - "packages/api/src/**/*.ts"
+---
+
+# Next.js 16 Caching Guidelines
+
+## Route Rendering Classification
+
+### Intentionally Dynamic (force-dynamic)
+- All SaaS app routes under `app/(saas)/app/` — layout sets `dynamic = "force-dynamic"` and `revalidate = 0`.
+- Auth pages (`app/auth/*`) — each sets `force-dynamic`.
+- Onboarding / billing / org-creation pages.
+
+### Cache-Friendly Public Routes
+- Public org pages under `app/(marketing)/[locale]/org/[slug]/` should NOT use `headers()` or `cookies()` in layouts or pages.
+- Auth-dependent UI in public routes must use client components with `useSession()` instead of server-side `headers()` + `getSession()`.
+
+### Root Layout
+- The root layout reads `cookies()` for locale and consent. This is a known dynamic-forcing pattern. When PPR (Partial Prerendering) is adopted, this can be mitigated.
+
+## Cache Invalidation
+
+### Path-Based (`revalidatePath`)
+- Always use **resolved slugs**, never raw `organizationId` (cuid) or literal bracket placeholders like `[organizationSlug]`.
+- Use the centralized helpers from `packages/api/src/lib/revalidation.ts`:
+  - `revalidateSaasPath(organizationId, ...segments)` — resolves slug, builds `/app/{slug}/...`
+  - `revalidatePublicOrgPath(organizationId, ...segments)` — resolves slug, builds `/org/{slug}/...`
+  - `saasPath(slug, ...segments)` — builds path when slug is already known
+  - `publicOrgPath(slug, ...segments)` — builds path when slug is already known
+
+### Tag-Based (`revalidateTag`)
+- Use tags from `packages/api/src/lib/cache-tags.ts` for entity-scoped invalidation.
+- Tag naming convention: `entity:scope:identifier` (e.g., `org:my-org:songs`).
+- In Next.js 16, `revalidateTag` requires a second `profile` argument — use `"default"` for standard revalidation.
+- Available tag helpers: `orgProfileTag`, `orgSongsTag`, `orgAlbumsTag`, `orgCompaniesTag`, `orgEventsTag`, `orgSongTag`, `orgEventTag`.
+- Higher-level helpers: `revalidateOrgTags(organizationId, ...entities)`, `revalidateOrgSongTag(organizationId, songId)`, `revalidateOrgEventTag(organizationId, eventId)`.
+
+### When to Use Which
+- **`revalidatePath`** — for page-level Router Cache invalidation after mutations.
+- **`revalidateTag`** — for data-level cache invalidation that can fan out across multiple pages sharing the same data.
+- Most mutations should call **both**: `revalidateSaasPath` for the SaaS dashboard + `revalidateOrgTags` for public pages.
+
+## Dynamic API Rules
+
+| API | Effect | When to Use |
+|-----|--------|-------------|
+| `cookies()` | Forces dynamic rendering for the segment | Only in intentionally dynamic routes or root layout |
+| `headers()` | Forces dynamic rendering for the segment | Only in intentionally dynamic routes (SaaS, auth) |
+| `searchParams` prop | Dynamic per-request | Acceptable in pages that naturally vary by query |
+| React `cache()` | Per-request memoization only | Use to deduplicate within a single RSC render, not for cross-request caching |
+
+## Adding New Features
+
+1. If the feature is behind auth, place it under `app/(saas)/app/` where `force-dynamic` is already set.
+2. If the feature is public-facing, avoid `headers()` and `cookies()` in its layout/page. Use client components for auth-dependent UI.
+3. For mutations that affect public data, add both `revalidateSaasPath` and `revalidateOrgTags` calls.
+4. Never hardcode paths as strings — use the `revalidation.ts` helpers.

@@ -56,9 +56,11 @@ export const moduleListItemSchema = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string().optional(),
-  inferredConfidence: z.number(),
+  confidence: z.number(),
+  moduleCandidateScore: z.number().optional(),
   inboundCount: z.number(),
   outboundCount: z.number(),
+  fileCount: z.number(),
   violationCount: z.number(),
 });
 

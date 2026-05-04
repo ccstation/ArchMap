@@ -3,6 +3,8 @@
 ## Purpose
 This document sketches a prototype detection flow for ArchMap.
 
+**Canonical weights and thresholds:** `detection-and-scoring-rules.md` supersedes the numeric coefficients in the pseudocode below if they differ (notably `computeSurfaceVisibilityScore`).
+
 It combines:
 - structural discovery
 - dependency extraction
@@ -33,6 +35,8 @@ The purpose is to guide implementation, not to lock in exact code structure.
 
 ```pseudo
 function analyzeRepository(repoPath):
+    thresholds = defaultAnalysisThresholds()  // same keys as analysisMeta.thresholds; see detection-and-scoring-rules.md
+
     repository = loadRepositoryMetadata(repoPath)
     frameworkInfo = detectFrameworks(repoPath)
     sourceFiles = collectSourceFiles(repoPath, frameworkInfo)
@@ -65,14 +69,14 @@ function analyzeRepository(repoPath):
         candidate.evidence = collectModuleEvidence(candidate, dependencyGraph)
         moduleCandidates.add(candidate)
 
-    modules = promoteModuleCandidates(moduleCandidates, threshold = 60)
+    modules = promoteModuleCandidates(moduleCandidates, threshold = thresholds.moduleCandidate)
     assignElementsToModules(elements, modules, dependencyGraph)
 
     for each element in elements:
         element.metrics = computeElementMetrics(element, dependencyGraph, modules)
         element.noiseScore = computeNoiseScore(element)
         element.visibilityScore = computeSurfaceVisibilityScore(element, modules)
-        element.collapsedByDefault = element.visibilityScore < 50
+        element.collapsedByDefault = element.visibilityScore < thresholds.visibilityCollapseBelow
 
     seamCandidates = groupCrossBoundaryDependencies(dependencies, modules)
     seams = []
@@ -81,7 +85,7 @@ function analyzeRepository(repoPath):
         candidate.score = computeSeamScore(candidate, modules, elements)
         candidate.evidence = collectSeamEvidence(candidate)
 
-        if candidate.score >= 65:
+        if candidate.score >= thresholds.seamPromotion:
             seams.add(promoteSeam(candidate))
 
     violations = []
@@ -136,26 +140,24 @@ function inferInitialClusters(elements, dependencyGraph):
 ```
 
 ### computeSurfaceVisibilityScore
-Applies the caller-based visibility idea safely.
+Applies the caller-based visibility idea safely. Framework entry points are **not** a separate weighted term: `scoreArchitecturalRole` (and public surface where applicable) should elevate routes and similar entry files. See `detection-and-scoring-rules.md`.
 
 ```pseudo
 function computeSurfaceVisibilityScore(element, modules):
     callerCountScore = normalizeDistinctCallers(element.metrics.distinctCallerCount)
     crossModuleCallerScore = normalizeDistinctCallingModules(element.metrics.distinctCallingModuleCount)
     publicSurfaceScore = element.flags.isPublicExport ? 100 : 0
-    entryScore = element.flags.isFrameworkEntryPoint ? 100 : 0
     roleScore = scoreArchitecturalRole(element.role)
     downstreamReachScore = normalizeDownstreamReach(element.metrics.downstreamReach)
     noisePenalty = element.noiseScore
 
     return weightedSum(
-        0.15 * callerCountScore,
-        0.20 * crossModuleCallerScore,
-        0.15 * publicSurfaceScore,
-        0.15 * entryScore,
+        0.20 * callerCountScore,
+        0.25 * crossModuleCallerScore,
+        0.20 * publicSurfaceScore,
         0.20 * roleScore,
         0.15 * downstreamReachScore,
-       -0.25 * noisePenalty
+       -0.30 * noisePenalty
     )
 ```
 

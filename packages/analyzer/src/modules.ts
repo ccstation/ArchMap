@@ -26,7 +26,78 @@ function normalizeSeg(p: string): string {
   return p.replace(/\\/g, "/");
 }
 
-/** First-level folders under `src` or root become module roots */
+function placeholderElement(
+  _repositoryId: string,
+  root: string,
+  modId: string,
+  filePath: string,
+): Element {
+  const rel = normalizeSeg(path.relative(root, filePath));
+  const base = path.basename(filePath, path.extname(filePath));
+  return {
+    id: shortId("el", [modId, filePath]),
+    moduleId: modId,
+    type: "file",
+    name: base,
+    filePath: rel,
+    role: "unknown",
+    flags: {
+      isPublicExport: false,
+      isFrameworkEntryPoint: false,
+      isGenerated: false,
+      isTestOnly: false,
+    },
+    metrics: {
+      distinctCallerCount: 0,
+      distinctCallingModuleCount: 0,
+      fanIn: 0,
+      fanOut: 0,
+      downstreamReach: 0,
+    },
+    visibility: {
+      surfaceVisibilityScore: 50,
+      collapsedByDefault: true,
+    },
+    noiseScore: 15,
+    evidence: [{ type: "legacy-infer", detail: "inferModules() placeholder metrics" }],
+  };
+}
+
+function folderModule(
+  repositoryId: string,
+  id: string,
+  name: string,
+  folderPath: string,
+  confidence: number,
+  description: string,
+  rootPaths: string[],
+): ArchModule {
+  return {
+    id,
+    repositoryId,
+    name,
+    folderPath: normalizeSeg(folderPath),
+    kind: name.includes("root") ? "root-bucket" : "business-module",
+    source: "structural",
+    confidence,
+    score: {
+      moduleCandidate: Math.round(confidence * 100),
+      structuralBoundary: 80,
+      cohesion: 60,
+      encapsulation: 60,
+      domainNaming: 55,
+      roleDiversity: 40,
+      utilityNoisePenalty: 10,
+    },
+    boundaries: { rootPaths },
+    elementIds: [],
+    evidence: [{ type: "folder-boundary", detail: description }],
+    promoted: true,
+    description,
+  };
+}
+
+/** Legacy folder-only inference; prefer analyzeRepository() for doc-aligned pipeline. */
 export function inferModules(input: ModuleInferenceInput): ModuleInferenceResult {
   const { repositoryId, rootPath, files, internalEdges } = input;
   const root = path.normalize(rootPath);
@@ -56,28 +127,34 @@ export function inferModules(input: ModuleInferenceInput): ModuleInferenceResult
   const nameToId = new Map<string, string>();
 
   const rootModuleId = shortId("mod", [repositoryId, "__root__"]);
-  modules.push({
-    id: rootModuleId,
-    repositoryId,
-    name: useSrc ? "(src root)" : "(root)",
-    folderPath: normalizeSeg(baseDir),
-    inferredConfidence: 0.7,
-    description: "Files not under a first-level folder",
-  });
+  modules.push(
+    folderModule(
+      repositoryId,
+      rootModuleId,
+      useSrc ? "(src root)" : "(root)",
+      baseDir,
+      0.7,
+      "Files not under a first-level folder",
+      ["."],
+    ),
+  );
   nameToId.set("__root__", rootModuleId);
 
   for (const name of moduleNames) {
     const id = shortId("mod", [repositoryId, name]);
     nameToId.set(name, id);
     const folderPath = topLevelDirs.get(name)!;
-    modules.push({
-      id,
-      repositoryId,
-      name,
-      folderPath: normalizeSeg(folderPath),
-      inferredConfidence: 0.85,
-      description: `Inferred from folder ${name}`,
-    });
+    modules.push(
+      folderModule(
+        repositoryId,
+        id,
+        name,
+        folderPath,
+        0.85,
+        `Inferred from folder ${name}`,
+        [normalizeSeg(path.relative(root, folderPath))],
+      ),
+    );
   }
 
   const fileToModuleId = new Map<string, string>();
@@ -110,15 +187,11 @@ export function inferModules(input: ModuleInferenceInput): ModuleInferenceResult
   const elements: Element[] = [];
   for (const f of files) {
     const modId = assignModule(f);
-    const rel = path.relative(root, f);
-    const base = path.basename(f, path.extname(f));
-    elements.push({
-      id: shortId("el", [modId, f]),
-      moduleId: modId,
-      type: "file",
-      name: base,
-      filePath: normalizeSeg(rel),
-    });
+    elements.push(placeholderElement(repositoryId, root, modId, f));
+  }
+
+  for (const m of modules) {
+    m.elementIds = elements.filter((e) => e.moduleId === m.id).map((e) => e.id);
   }
 
   const pairWeights = new Map<string, { count: number; examples: { s: string; t: string }[] }>();
@@ -158,14 +231,27 @@ export function inferModules(input: ModuleInferenceInput): ModuleInferenceResult
       evidenceCount: data.count,
       evidence,
     });
+    const seamScore = Math.min(100, Math.round((100 * weight) / (weight + 3)));
     seams.push({
       id: shortId("seam", [sourceModuleId, targetModuleId]),
       repositoryId,
       fromModuleId: sourceModuleId,
       toModuleId: targetModuleId,
       seamType: "import",
-      strength: Math.min(1, weight / (5 + weight)),
+      strength: Math.min(1, seamScore / 100),
       evidenceCount: data.count,
+      confidence: seamScore / 100,
+      score: {
+        seam: seamScore,
+        crossBoundaryStrength: seamScore,
+        interfaceEvidence: 50,
+        repeatedInteraction: Math.min(100, weight * 10),
+        roleBoundary: 50,
+        dependencyDirection: 50,
+        callerConvergence: 50,
+        noisePenalty: 20,
+      },
+      evidence: [{ type: "legacy", detail: "Seam from inferModules() legacy path" }],
     });
   }
 

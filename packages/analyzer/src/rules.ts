@@ -1,12 +1,11 @@
 import path from "node:path";
-import type { Violation } from "@archmap/graph-model";
+import type { Element, Violation } from "@archmap/graph-model";
 import { shortId } from "./ids.js";
 
 export interface RuleEngineInput {
   repositoryId: string;
   rootPath: string;
   moduleIds: string[];
-  /** adjacency module -> modules it depends on */
   adjacency: Map<string, Set<string>>;
   moduleDependencies: {
     sourceModuleId: string;
@@ -19,8 +18,23 @@ export interface RuleEngineInput {
     importSpecifier: string;
   }[];
   fileToModuleId: Map<string, string>;
-  /** module root folder path for public entry detection */
   moduleFolderPath: Map<string, string>;
+  elements?: Element[];
+  /** Skip high-coupling noise on catch-all bucket */
+  rootModuleId?: string;
+}
+
+function norm(p: string): string {
+  return path.normalize(p);
+}
+
+function elementIdByAbs(rootPath: string, elements: Element[]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const el of elements) {
+    const abs = norm(path.join(rootPath, el.filePath.replace(/\//g, path.sep)));
+    m.set(abs, el.id);
+  }
+  return m;
 }
 
 /** Tarjan SCC — returns components with >1 node or single-node with self-loop */
@@ -82,9 +96,12 @@ export function runRules(input: RuleEngineInput): Violation[] {
     internalEdges,
     fileToModuleId,
     moduleFolderPath,
+    elements = [],
+    rootModuleId,
   } = input;
 
   const violations: Violation[] = [];
+  const elByAbs = elementIdByAbs(rootPath, elements);
 
   const cycles = findCycleGroups(adjacency);
   const seenCycle = new Set<string>();
@@ -100,6 +117,7 @@ export function runRules(input: RuleEngineInput): Violation[] {
       severity: "high",
       message: `Circular dependency: ${tour}`,
       moduleIds: cyc,
+      evidence: [{ type: "cycle", detail: tour }],
     });
   }
 
@@ -116,6 +134,7 @@ export function runRules(input: RuleEngineInput): Violation[] {
 
   const threshold = 8;
   for (const id of input.moduleIds) {
+    if (rootModuleId && id === rootModuleId) continue;
     const deg = (outDegree.get(id) ?? 0) + (inDegree.get(id) ?? 0);
     if (deg >= threshold) {
       violations.push({
@@ -126,6 +145,7 @@ export function runRules(input: RuleEngineInput): Violation[] {
         severity: deg >= 16 ? "high" : "medium",
         message: `Module has high coupling (fan-in + fan-out edge types: ${deg})`,
         moduleIds: [id],
+        evidence: [{ type: "degree-sum", detail: String(deg) }],
       });
     }
   }
@@ -134,36 +154,42 @@ export function runRules(input: RuleEngineInput): Violation[] {
   const seenDeep = new Set<string>();
 
   for (const edge of internalEdges) {
-    const sm = fileToModuleId.get(path.normalize(edge.sourceFilePath));
-    const tm = fileToModuleId.get(path.normalize(edge.targetFilePath));
+    const sm = fileToModuleId.get(norm(edge.sourceFilePath));
+    const tm = fileToModuleId.get(norm(edge.targetFilePath));
     if (!sm || !tm || sm === tm) continue;
 
     const targetModuleFolder = moduleFolderPath.get(tm);
     if (!targetModuleFolder) continue;
 
-    const targetNorm = path.normalize(edge.targetFilePath);
+    const targetNorm = norm(edge.targetFilePath);
     let rel = path.relative(targetModuleFolder, targetNorm);
     rel = rel.replace(/\\/g, "/");
     const segments = rel.split("/").filter(Boolean);
-    // Deep: target file lives in a subfolder of the module (not directly at module root)
     const isDeepTarget = segments.length > 1;
 
     if (isDeepTarget) {
       const dedupe = `${sm}|${tm}|${targetNorm}`;
       if (seenDeep.has(dedupe)) continue;
       seenDeep.add(dedupe);
+      const srcRel = path.relative(normRoot, edge.sourceFilePath).replace(/\\/g, "/");
+      const tgtRel = path.relative(normRoot, edge.targetFilePath).replace(/\\/g, "/");
+      const srcId = elByAbs.get(norm(edge.sourceFilePath));
+      const tgtId = elByAbs.get(norm(edge.targetFilePath));
       violations.push({
         id: shortId("viol", ["deep", edge.sourceFilePath, edge.targetFilePath]),
         repositoryId,
         moduleId: sm,
         type: "deep-import",
         severity: "medium",
-        message: `Deep import from ${path.relative(normRoot, edge.sourceFilePath)} into ${path.relative(normRoot, edge.targetFilePath)}`,
+        message: `Deep import from ${srcRel} into ${tgtRel}`,
         moduleIds: [sm, tm],
-        evidence: {
-          sourceFilePath: edge.sourceFilePath,
-          targetFilePath: edge.targetFilePath,
-        },
+        elementIds: [srcId, tgtId].filter((x): x is string => Boolean(x)),
+        evidence: [
+          {
+            type: "cross-boundary-internal-access",
+            detail: `${srcRel} imports ${tgtRel}`,
+          },
+        ],
       });
     }
   }
@@ -183,6 +209,7 @@ export function runRules(input: RuleEngineInput): Violation[] {
         severity: "low",
         message: `Strong dependency between modules (${w} file-level references)`,
         moduleIds: [a, b],
+        evidence: [{ type: "weight", detail: String(w) }],
       });
     }
   }

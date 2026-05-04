@@ -51,7 +51,8 @@ type ModuleListItem = {
   id: string;
   name: string;
   description?: string;
-  inferredConfidence: number;
+  confidence: number;
+  moduleCandidateScore?: number;
   inboundCount: number;
   outboundCount: number;
   fileCount: number;

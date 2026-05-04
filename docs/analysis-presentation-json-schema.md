@@ -392,6 +392,7 @@ Metadata about heuristics and generation settings.
   "thresholds": {
     "moduleCandidate": 60,
     "surfaceVisibility": 75,
+    "visibilityCollapseBelow": 50,
     "seamPromotion": 65,
     "noiseSuppression": 60
   }

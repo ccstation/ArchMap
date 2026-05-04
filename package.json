@@ -4,6 +4,7 @@
   "scripts": {
     "build": "pnpm --filter @archmap/graph-model build && pnpm --filter @archmap/analyzer build && pnpm --filter @archmap/web build && pnpm --filter archview build",
     "dev": "pnpm --filter @archmap/web dev",
+    "analyze": "node ./packages/analyzer/dist/cli.js",
     "snapshot": "node ./packages/analyzer/dist/cli.js",
     "archview": "pnpm --filter archview build && node ./packages/archview/dist/cli.js",
     "test": "pnpm --filter @archmap/graph-model test && pnpm --filter @archmap/analyzer test",

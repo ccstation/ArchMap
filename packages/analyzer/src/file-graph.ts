@@ -8,8 +8,10 @@ import {
   ModuleResolutionKind,
   JsxEmit,
 } from "typescript";
-import type { FileDependency } from "@archmap/graph-model";
+import type { ArchitecturalRole, Element, FileDependency } from "@archmap/graph-model";
 import { shortId } from "./ids.js";
+import { detectFrameworkInfo } from "./detection/framework.js";
+import { classifyRole, computeElementFlags } from "./detection/classify.js";
 
 export interface BuildFileGraphOptions {
   rootPath: string;
@@ -17,20 +19,28 @@ export interface BuildFileGraphOptions {
   hasTsconfig: boolean;
 }
 
+export interface FileScanInfo {
+  absPath: string;
+  relPath: string;
+  role: ArchitecturalRole;
+  flags: Element["flags"];
+}
+
 export interface FileGraphResult {
   fileDependencies: FileDependency[];
-  /** Resolved internal edges for module inference */
   internalEdges: {
     sourceFilePath: string;
     targetFilePath: string;
     importSpecifier: string;
   }[];
+  fileScanInfos: FileScanInfo[];
 }
 
 export function buildFileGraph(options: BuildFileGraphOptions): FileGraphResult {
   const { rootPath, files, hasTsconfig } = options;
   const tsconfigPath = path.join(rootPath, "tsconfig.json");
   const useTsconfig = hasTsconfig && fs.existsSync(tsconfigPath);
+  const framework = detectFrameworkInfo(rootPath);
 
   const fallbackOptions: CompilerOptions = {
     allowJs: true,
@@ -55,17 +65,26 @@ export function buildFileGraph(options: BuildFileGraphOptions): FileGraphResult 
     try {
       project.addSourceFileAtPath(f);
     } catch {
-      // skip invalid paths
+      /* skip */
     }
   }
 
   const internalEdges: FileGraphResult["internalEdges"] = [];
   const seen = new Set<string>();
+  const fileScanInfos: FileScanInfo[] = [];
 
   for (const sourcePath of files) {
     const normSource = path.normalize(sourcePath);
     const sf = project.getSourceFile(normSource);
     if (!sf) continue;
+    const rel = path.relative(rootPath, normSource).replace(/\\/g, "/");
+    const role = classifyRole(rel, framework);
+    fileScanInfos.push({
+      absPath: normSource,
+      relPath: rel,
+      role,
+      flags: computeElementFlags(sf, rel, role),
+    });
 
     const addEdge = (specifier: string, targetPath: string | undefined) => {
       if (!targetPath) return;
@@ -103,5 +122,5 @@ export function buildFileGraph(options: BuildFileGraphOptions): FileGraphResult 
     importSpecifier: e.importSpecifier || undefined,
   }));
 
-  return { fileDependencies, internalEdges };
+  return { fileDependencies, internalEdges, fileScanInfos };
 }
