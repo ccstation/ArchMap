@@ -262,6 +262,23 @@ export const moduleOverridesSchema = z.object({
   fileToModule: z.record(z.string(), z.string()).optional(),
 });
 
+export const importCallSiteSchema = z.object({
+  otherModuleId: z.string(),
+  callerFilePath: z.string(),
+  calleeLabel: z.string(),
+  line: z.number(),
+  isCrossBoundary: z.boolean(),
+});
+
+export const moduleImportCallSitesSchema = z.object({
+  outbound: z.array(importCallSiteSchema),
+  inbound: z.array(importCallSiteSchema),
+  outboundTotal: z.number(),
+  inboundTotal: z.number(),
+  outboundOmitted: z.number().optional(),
+  inboundOmitted: z.number().optional(),
+});
+
 export const snapshotSchema = z.object({
   meta: snapshotMetaSchema,
   repository: repositorySchema,
@@ -274,6 +291,8 @@ export const snapshotSchema = z.object({
   violations: z.array(violationSchema),
   ai: aiSummarySchema.optional(),
   overrides: moduleOverridesSchema.optional(),
+  /** Static import-linked call sites (direct / namespace-root calls across modules). */
+  moduleImportCallSites: z.record(z.string(), moduleImportCallSitesSchema).optional(),
 });
 
 export type Repository = z.infer<typeof repositorySchema>;
@@ -292,5 +311,7 @@ export type AnalysisMeta = z.infer<typeof analysisMetaSchema>;
 export type AnalysisThresholds = z.infer<typeof analysisThresholdsSchema>;
 export type ArchitecturalRole = z.infer<typeof architecturalRoleSchema>;
 export type EvidenceEntry = z.infer<typeof evidenceEntrySchema>;
+export type ImportCallSite = z.infer<typeof importCallSiteSchema>;
+export type ModuleImportCallSites = z.infer<typeof moduleImportCallSitesSchema>;
 export type ModuleScore = z.infer<typeof moduleScoreSchema>;
 export type SeamScore = z.infer<typeof seamScoreSchema>;

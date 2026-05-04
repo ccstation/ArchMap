@@ -28,6 +28,18 @@ describe("analyzeRepository", () => {
       const users = s.modules.find((m) => m.name === "users");
       expect(auth?.score.moduleCandidate).toBeGreaterThanOrEqual(60);
       expect(users?.score.moduleCandidate).toBeGreaterThanOrEqual(60);
+      expect(s.moduleImportCallSites).toBeDefined();
+      expect(auth && users).toBeTruthy();
+      const authSites = s.moduleImportCallSites![auth!.id]!;
+      const userSites = s.moduleImportCallSites![users!.id]!;
+      expect(authSites.outboundTotal).toBeGreaterThanOrEqual(1);
+      expect(
+        authSites.outbound.some(
+          (x) => x.otherModuleId === users!.id && x.calleeLabel.includes("profile"),
+        ),
+      ).toBe(true);
+      expect(userSites.outbound.some((x) => x.calleeLabel.includes("token"))).toBe(true);
+      expect(userSites.inbound.some((x) => x.otherModuleId === auth!.id)).toBe(true);
       for (const el of s.elements) {
         expect(el.role).toBeDefined();
         expect(el.visibility.collapsedByDefault).toBe(

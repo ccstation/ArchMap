@@ -36,6 +36,7 @@ export const graphNodeSchema = z.object({
   type: z.literal("module"),
   name: z.string(),
   risk: z.enum(["low", "medium", "high"]).optional(),
+  relativeFilePath: z.string().optional(),
 });
 
 export const graphEdgeSchema = z.object({
@@ -68,6 +69,25 @@ export const modulesListResponseSchema = z.object({
   items: z.array(moduleListItemSchema),
 });
 
+export const importCallSiteDtoSchema = z.object({
+  otherModuleId: z.string(),
+  callerFilePath: z.string(),
+  calleeLabel: z.string(),
+  line: z.number(),
+  isCrossBoundary: z.boolean(),
+});
+
+export const moduleDetailImportCallSitesSchema = z.object({
+  outbound: z.array(importCallSiteDtoSchema),
+  inbound: z.array(importCallSiteDtoSchema),
+  outboundTotal: z.number(),
+  inboundTotal: z.number(),
+  outboundOmitted: z.number(),
+  inboundOmitted: z.number(),
+  outboundLines: z.array(z.string()),
+  inboundLines: z.array(z.string()),
+});
+
 export const moduleDetailResponseSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -89,6 +109,7 @@ export const moduleDetailResponseSchema = z.object({
     }),
   ),
   aiSummary: z.string().optional(),
+  importCallSites: moduleDetailImportCallSitesSchema,
 });
 
 export const seamsListResponseSchema = z.object({

@@ -17,6 +17,7 @@ import {
 } from "./detection/module-candidates.js";
 import { buildElements } from "./detection/element-metrics.js";
 import { buildModuleDependenciesAndSeams } from "./detection/seam-scoring.js";
+import { buildModuleImportCallSites } from "./import-linked-call-sites.js";
 
 export interface AnalyzeOptions {
   repoPath: string;
@@ -65,6 +66,31 @@ export async function analyzeRepository(options: AnalyzeOptions): Promise<Snapsh
     hasTsconfig: ingested.hasTsconfig,
   });
 
+  try {
+    return analyzeRepositoryBody(
+      options,
+      ingested,
+      repositoryId,
+      snapshotId,
+      frameworkInfo,
+      graph,
+    );
+  } finally {
+    const p = graph.project as unknown as { forget?: () => void };
+    p.forget?.();
+  }
+}
+
+function analyzeRepositoryBody(
+  options: AnalyzeOptions,
+  ingested: Awaited<ReturnType<typeof ingestRepository>>,
+  repositoryId: string,
+  snapshotId: string,
+  frameworkInfo: ReturnType<typeof detectFrameworkInfo>,
+  graph: ReturnType<typeof buildFileGraph>,
+): Snapshot {
+  const { name } = options;
+
   const scanByPath = new Map(graph.fileScanInfos.map((s) => [s.absPath, s]));
   const buckets = listStructuralBuckets(ingested.rootPath);
   const clusters = inferClusters(ingested.files, buckets, graph.internalEdges);
@@ -108,6 +134,14 @@ export async function analyzeRepository(options: AnalyzeOptions): Promise<Snapsh
     elements,
     fileToModuleId,
   );
+
+  const { moduleImportCallSites } = buildModuleImportCallSites({
+    project: graph.project,
+    rootPath: ingested.rootPath,
+    files: ingested.files,
+    fileToModuleId,
+    fileDependencies,
+  });
 
   const moduleFolderPath = new Map(modules.map((m) => [m.id, path.normalize(m.folderPath)]));
   const adjacency = buildAdjacency(moduleDependencies);
@@ -164,6 +198,7 @@ export async function analyzeRepository(options: AnalyzeOptions): Promise<Snapsh
     violations,
     overrides: undefined,
     ai: undefined,
+    moduleImportCallSites,
   };
 
   return snapshot;

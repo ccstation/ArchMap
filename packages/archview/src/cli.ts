@@ -96,7 +96,10 @@ async function run(): Promise<void> {
     .option("--src <path>", "Repository root to analyze", process.cwd())
     .option("-o, --out <file>", "Write snapshot JSON to this path")
     .option("--analyze-only", "Analyze and exit (do not start the web UI)")
-    .option("--json", "With --analyze-only, print snapshot JSON to stdout")
+    .option(
+      "--json",
+      "Print snapshot JSON to stdout after analysis (with web UI, prints before the server starts)",
+    )
     .option(
       "--skip-fail-on-violations",
       "Do not exit with status 1 when violations are present (analyze-only)",
@@ -148,17 +151,21 @@ async function run(): Promise<void> {
 
   writeSnapshot(snapshot, snapshotPath);
   console.error(`[archview] Wrote snapshot (${snapshot.modules.length} modules, ${snapshot.moduleDependencies.length} edges, ${snapshot.violations.length} violations)`);
+  console.error(`[archview] Snapshot file: ${snapshotPath}`);
 
   if (analyzeOnly) {
     const code = exitCodeForViolations(snapshot, failOnViolations);
     if (raw.json) {
       console.log(JSON.stringify(snapshot, null, 2));
-      console.error(snapshotPath);
     } else {
       console.log(snapshotPath);
     }
     process.exit(code);
     return;
+  }
+
+  if (raw.json) {
+    console.log(JSON.stringify(snapshot, null, 2));
   }
 
   if (raw.strict && snapshot.violations.length > 0) {

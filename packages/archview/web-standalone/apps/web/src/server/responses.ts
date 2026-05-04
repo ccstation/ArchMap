@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { Snapshot } from "@archmap/graph-model";
+import type { ImportCallSite, Snapshot } from "@archmap/graph-model";
 import { extractPublicSurface } from "@archmap/analyzer";
 import path from "node:path";
 
@@ -37,6 +37,50 @@ export interface GraphFromSnapshotOptions {
   moduleId?: string;
 }
 
+function formatCallSiteLine(site: ImportCallSite, moduleNameById: Map<string, string>): string {
+  const other = moduleNameById.get(site.otherModuleId) ?? site.otherModuleId.slice(0, 8);
+  return `${site.callerFilePath}:${site.line} · ${site.calleeLabel} → ${other}`;
+}
+
+function buildModuleCallSitePreview(
+  snapshot: Snapshot,
+  moduleIds: string[],
+  moduleNameById: Map<string, string>,
+): Record<
+  string,
+  {
+    inboundTotal: number;
+    outboundTotal: number;
+    inboundLines: string[];
+    outboundLines: string[];
+  }
+> {
+  const preview: Record<
+    string,
+    {
+      inboundTotal: number;
+      outboundTotal: number;
+      inboundLines: string[];
+      outboundLines: string[];
+    }
+  > = {};
+  const sites = snapshot.moduleImportCallSites;
+  for (const mid of moduleIds) {
+    const mc = sites?.[mid];
+    if (!mc) {
+      preview[mid] = { inboundTotal: 0, outboundTotal: 0, inboundLines: [], outboundLines: [] };
+      continue;
+    }
+    preview[mid] = {
+      inboundTotal: mc.inboundTotal,
+      outboundTotal: mc.outboundTotal,
+      inboundLines: mc.inbound.map((s) => formatCallSiteLine(s, moduleNameById)),
+      outboundLines: mc.outbound.map((s) => formatCallSiteLine(s, moduleNameById)),
+    };
+  }
+  return preview;
+}
+
 export function graphFromSnapshot(
   snapshot: Snapshot,
   level: "module" | "file" | "element",
@@ -57,11 +101,17 @@ export function graphFromSnapshot(
       let risk: "low" | "medium" | "high" = "low";
       if (vCount >= 3) risk = "high";
       else if (vCount >= 1) risk = "medium";
+      const cs = snapshot.moduleImportCallSites?.[m.id];
+      const inTot = cs?.inboundTotal ?? 0;
+      const outTot = cs?.outboundTotal ?? 0;
+      const callSiteSummary =
+        inTot + outTot > 0 ? `${inTot} import-linked calls in · ${outTot} out` : undefined;
       return {
         id: m.id,
         type: "module" as const,
         name: m.name,
         risk,
+        callSiteSummary,
       };
     });
     const seamByPair = new Map<string, Snapshot["seams"][number]>();
@@ -117,6 +167,8 @@ export function graphFromSnapshot(
         id: abs,
         type: "module" as const,
         name: displayName,
+        /** Repo-relative path (e.g. web/app/.../page.tsx) for disambiguation in the file map. */
+        relativeFilePath: el.filePath.replace(/\\/g, "/"),
         risk: undefined as undefined,
         moduleId: el.moduleId,
         moduleLabel,
@@ -137,16 +189,24 @@ export function graphFromSnapshot(
     }
     const edges = deps.map((e) => ({
       id: e.id,
-      source: e.sourceFilePath,
-      target: e.targetFilePath,
+      source: path.normalize(e.sourceFilePath),
+      target: path.normalize(e.targetFilePath),
       type: e.type,
     }));
+    const moduleNameById = new Map(snapshot.modules.map((mm) => [mm.id, mm.name]));
+    const moduleIdsInGraph = [...new Set(elements.map((el) => el.moduleId))];
+    const moduleCallSitePreview = buildModuleCallSitePreview(
+      snapshot,
+      moduleIdsInGraph,
+      moduleNameById,
+    );
     return {
       snapshotId: snapshot.meta.id,
       level: "file" as const,
       ...(focusModuleId ? { focusModuleId } : {}),
       nodes,
       edges,
+      moduleCallSitePreview,
     };
   }
   return {
@@ -225,6 +285,17 @@ export function moduleDetail(snapshot: Snapshot, moduleId: string, rootPath: str
     .filter((v) => v.moduleId === moduleId || v.moduleIds?.includes(moduleId))
     .map((v) => ({ severity: v.severity, message: v.message }));
 
+  const moduleNameById = new Map(snapshot.modules.map((mm) => [mm.id, mm.name]));
+  const rawCs = snapshot.moduleImportCallSites?.[moduleId];
+  const importCallSites = rawCs ?? {
+    outbound: [],
+    inbound: [],
+    outboundTotal: 0,
+    inboundTotal: 0,
+    outboundOmitted: 0,
+    inboundOmitted: 0,
+  };
+
   return {
     id: mod.id,
     name: mod.name,
@@ -235,5 +306,15 @@ export function moduleDetail(snapshot: Snapshot, moduleId: string, rootPath: str
     outboundDependencies: outbound,
     risks,
     aiSummary: snapshot.ai?.moduleSummaries?.[moduleId],
+    importCallSites: {
+      outbound: importCallSites.outbound,
+      inbound: importCallSites.inbound,
+      outboundTotal: importCallSites.outboundTotal,
+      inboundTotal: importCallSites.inboundTotal,
+      outboundOmitted: importCallSites.outboundOmitted ?? 0,
+      inboundOmitted: importCallSites.inboundOmitted ?? 0,
+      outboundLines: importCallSites.outbound.map((s) => formatCallSiteLine(s, moduleNameById)),
+      inboundLines: importCallSites.inbound.map((s) => formatCallSiteLine(s, moduleNameById)),
+    },
   };
 }

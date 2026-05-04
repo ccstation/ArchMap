@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactFlow, {
   Background,
   Controls,
+  Handle,
   MiniMap,
   ReactFlowProvider,
   useEdgesState,
@@ -16,6 +17,7 @@ import ReactFlow, {
   type Node,
   type NodeProps,
   MarkerType,
+  Position,
 } from "reactflow";
 import "reactflow/dist/style.css";
 
@@ -23,12 +25,23 @@ type GraphNode = {
   id: string;
   type: "module";
   name: string;
+  /** Repo-relative file path from the graph API (file-level map). */
+  relativeFilePath?: string;
   risk?: "low" | "medium" | "high";
   moduleId?: string;
   moduleLabel?: string;
   /** Directory cluster under the module folder ("Module root" for loose files). */
   groupId?: string;
   groupLabel?: string;
+  /** Module-map zoom: import-linked call totals. */
+  callSiteSummary?: string;
+};
+
+type ModuleCallSitePreview = {
+  inboundTotal: number;
+  outboundTotal: number;
+  inboundLines: string[];
+  outboundLines: string[];
 };
 
 type GraphResponse = {
@@ -45,6 +58,7 @@ type GraphResponse = {
     evidenceCount?: number;
     evidenceDensity?: number;
   }[];
+  moduleCallSitePreview?: Record<string, ModuleCallSitePreview>;
 };
 
 type ModuleListItem = {
@@ -69,6 +83,28 @@ type ModuleDetail = {
   outboundDependencies: string[];
   risks: { severity: string; message: string }[];
   aiSummary?: string;
+  importCallSites: {
+    outbound: {
+      otherModuleId: string;
+      callerFilePath: string;
+      calleeLabel: string;
+      line: number;
+      isCrossBoundary: boolean;
+    }[];
+    inbound: {
+      otherModuleId: string;
+      callerFilePath: string;
+      calleeLabel: string;
+      line: number;
+      isCrossBoundary: boolean;
+    }[];
+    outboundTotal: number;
+    inboundTotal: number;
+    outboundOmitted: number;
+    inboundOmitted: number;
+    outboundLines: string[];
+    inboundLines: string[];
+  };
 };
 
 type SeamRow = {
@@ -107,14 +143,54 @@ function cycleIdsFromViolations(items: ViolationRow[]): Set<string> {
 const FILE_GROUP_PAD = 14;
 const FILE_GROUP_HEADER = 30;
 const FILE_CELL_W = 170;
-const FILE_CELL_H = 78;
-const FILE_INNER_COLS = 3;
+const FILE_CELL_H = 88;
 const FILE_GROUP_V_GAP = 24;
 const FILE_MODULE_PAD = 18;
 const FILE_MODULE_HEADER = 34;
 const FILE_MODULE_V_GAP = 44;
 
-function layoutFileGraphWithGroups(gn: GraphNode[]): Node[] {
+function filePathKey(p: string): string {
+  return p.replace(/\\/g, "/");
+}
+
+function compactRepoPath(filePath: string, maxLen = 52): string {
+  const p = filePath.replace(/\\/g, "/");
+  if (p.length <= maxLen) return p;
+  return `…${p.slice(-(maxLen - 1))}`;
+}
+
+/** Vertical import layers: importers above importees (source → target = arrow down). */
+function importLayersForFiles(
+  fileIds: string[],
+  edges: { source: string; target: string }[],
+): Map<string, number> {
+  const ids = new Set(fileIds);
+  const preds = new Map<string, string[]>();
+  for (const id of fileIds) preds.set(id, []);
+  for (const e of edges) {
+    if (!ids.has(e.source) || !ids.has(e.target)) continue;
+    preds.get(e.target)!.push(e.source);
+  }
+  const layer = new Map<string, number>();
+  for (const id of fileIds) layer.set(id, 0);
+  const iters = Math.max(fileIds.length + 2, 8);
+  for (let i = 0; i < iters; i++) {
+    for (const id of fileIds) {
+      let L = 0;
+      for (const p of preds.get(id) ?? []) {
+        if (ids.has(p)) L = Math.max(L, (layer.get(p) ?? 0) + 1);
+      }
+      layer.set(id, L);
+    }
+  }
+  return layer;
+}
+
+function layoutFileGraphWithGroups(
+  gn: GraphNode[],
+  edges: { source: string; target: string }[],
+  moduleCallSitePreview?: Record<string, ModuleCallSitePreview>,
+): Node[] {
   const byModule = new Map<string, GraphNode[]>();
   for (const n of gn) {
     const moduleId = n.moduleId ?? "__unknown_module__";
@@ -153,14 +229,42 @@ function layoutFileGraphWithGroups(gn: GraphNode[]): Node[] {
     let directoryYOffset = FILE_MODULE_HEADER + FILE_MODULE_PAD;
     let moduleInnerMaxWidth = 0;
     const moduleLabel = moduleFiles[0]?.moduleLabel ?? moduleId;
+    const p = moduleCallSitePreview?.[moduleId];
+    const lineCount = (p?.outboundLines?.length ?? 0) + (p?.inboundLines?.length ?? 0);
+    const callBlockExtra =
+      moduleCallSitePreview === undefined
+        ? 0
+        : p === undefined
+          ? 0
+          : lineCount > 0
+            ? Math.min(200, 52 + Math.min(lineCount, 16) * 15)
+            : (p.inboundTotal ?? 0) + (p.outboundTotal ?? 0) > 0
+              ? 36
+              : 0;
 
     for (const [directoryGroupId, directoryFiles] of directoryEntries) {
-      const sortedFiles = [...directoryFiles].sort((a, b) => a.name.localeCompare(b.name));
-      const count = sortedFiles.length;
-      const cols = Math.min(FILE_INNER_COLS, Math.max(1, Math.ceil(Math.sqrt(count))));
-      const rows = Math.ceil(count / cols);
-      const directoryFrameW = FILE_GROUP_PAD * 2 + cols * FILE_CELL_W;
-      const directoryFrameH = FILE_GROUP_HEADER + FILE_GROUP_PAD * 2 + rows * FILE_CELL_H;
+      const fileIds = directoryFiles.map((f) => f.id);
+      const layerById = importLayersForFiles(fileIds, edges);
+      const layerToFiles = new Map<number, GraphNode[]>();
+      let maxLayer = 0;
+      for (const file of directoryFiles) {
+        const L = layerById.get(file.id) ?? 0;
+        maxLayer = Math.max(maxLayer, L);
+        const arr = layerToFiles.get(L) ?? [];
+        arr.push(file);
+        layerToFiles.set(L, arr);
+      }
+      const rows: GraphNode[][] = [];
+      for (let L = 0; L <= maxLayer; L++) {
+        const row = [...(layerToFiles.get(L) ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+        if (row.length) rows.push(row);
+      }
+      if (!rows.length) rows.push([...directoryFiles].sort((a, b) => a.name.localeCompare(b.name)));
+
+      const maxRowLen = Math.max(...rows.map((r) => r.length), 1);
+      const directoryFrameW = FILE_GROUP_PAD * 2 + maxRowLen * FILE_CELL_W;
+      const directoryFrameH =
+        FILE_GROUP_HEADER + FILE_GROUP_PAD * 2 + Math.max(rows.length, 1) * FILE_CELL_H;
       const directoryFrameX = x0 + FILE_MODULE_PAD;
       const directoryFrameY = yCursor + directoryYOffset;
 
@@ -179,25 +283,33 @@ function layoutFileGraphWithGroups(gn: GraphNode[]): Node[] {
         },
       });
 
-      sortedFiles.forEach((file, i) => {
-        const col = i % cols;
-        const row = Math.floor(i / cols);
-        files.push({
-          id: file.id,
-          position: {
-            x: directoryFrameX + FILE_GROUP_PAD + col * FILE_CELL_W,
-            y: directoryFrameY + FILE_GROUP_HEADER + FILE_GROUP_PAD + row * FILE_CELL_H,
-          },
-          data: { label: file.name },
-          style: {
-            border: `2px solid ${riskColor(file.risk)}`,
-            borderRadius: 8,
-            padding: 6,
-            fontSize: 11,
-            maxWidth: 160,
-            background: "#fafafa",
-            zIndex: 2,
-          },
+      rows.forEach((rowFiles, rowIndex) => {
+        const rowW = rowFiles.length * FILE_CELL_W;
+        const innerW = directoryFrameW - FILE_GROUP_PAD * 2;
+        const rowStartX =
+          directoryFrameX + FILE_GROUP_PAD + Math.max(0, (innerW - rowW) / 2);
+        rowFiles.forEach((file, colIndex) => {
+          const subtitle = file.relativeFilePath
+            ? compactRepoPath(file.relativeFilePath)
+            : undefined;
+          files.push({
+            id: file.id,
+            type: "fileTile",
+            position: {
+              x: rowStartX + colIndex * FILE_CELL_W,
+              y: directoryFrameY + FILE_GROUP_HEADER + FILE_GROUP_PAD + rowIndex * FILE_CELL_H,
+            },
+            data: {
+              label: file.name,
+              subtitle,
+              pathTitle: file.relativeFilePath?.replace(/\\/g, "/"),
+              risk: file.risk,
+            },
+            style: {
+              width: FILE_CELL_W - 6,
+              zIndex: 2,
+            },
+          });
         });
       });
 
@@ -206,7 +318,8 @@ function layoutFileGraphWithGroups(gn: GraphNode[]): Node[] {
     }
 
     const moduleFrameWidth = FILE_MODULE_PAD * 2 + moduleInnerMaxWidth;
-    const moduleFrameHeight = directoryYOffset + FILE_MODULE_PAD - FILE_GROUP_V_GAP;
+    const moduleFrameHeight =
+      directoryYOffset + FILE_MODULE_PAD - FILE_GROUP_V_GAP + callBlockExtra;
     frames.push({
       id: `frame:module:${moduleId}`,
       type: "groupFrame",
@@ -214,7 +327,20 @@ function layoutFileGraphWithGroups(gn: GraphNode[]): Node[] {
       draggable: false,
       selectable: false,
       focusable: false,
-      data: { label: moduleLabel, tone: "module" },
+      data: {
+        label: moduleLabel,
+        tone: "module" as const,
+        ...(p &&
+        ((p.outboundLines?.length ?? 0) + (p.inboundLines?.length ?? 0) > 0 ||
+          (p.inboundTotal ?? 0) + (p.outboundTotal ?? 0) > 0)
+          ? {
+              inboundTotal: p.inboundTotal,
+              outboundTotal: p.outboundTotal,
+              inboundLines: p.inboundLines,
+              outboundLines: p.outboundLines,
+            }
+          : {}),
+      },
       style: {
         width: moduleFrameWidth,
         height: moduleFrameHeight,
@@ -228,10 +354,64 @@ function layoutFileGraphWithGroups(gn: GraphNode[]): Node[] {
   return [...frames, ...files];
 }
 
+function FileTileNode({
+  data,
+}: NodeProps<{
+  label: string;
+  subtitle?: string;
+  pathTitle?: string;
+  risk?: "low" | "medium" | "high";
+}>) {
+  return (
+    <div
+      className="relative rounded-lg border-2 bg-[#fafafa] px-1.5 py-1 shadow-sm"
+      style={{
+        borderColor: riskColor(data.risk),
+        maxWidth: FILE_CELL_W - 10,
+      }}
+    >
+      <Handle
+        type="target"
+        position={Position.Top}
+        className="!h-2 !w-2 !border-0 !bg-slate-500"
+        aria-label="Import target"
+      />
+      <div className="truncate text-[11px] font-semibold leading-tight text-zinc-900">{data.label}</div>
+      {data.subtitle ? (
+        <div
+          className="mt-0.5 truncate font-mono text-[9px] leading-tight text-zinc-500"
+          title={data.pathTitle ?? data.subtitle}
+        >
+          {data.subtitle}
+        </div>
+      ) : null}
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        className="!h-2 !w-2 !border-0 !bg-slate-500"
+        aria-label="Import source"
+      />
+    </div>
+  );
+}
+
 function GroupFrameNode({
   data,
-}: NodeProps<{ label: string; tone?: "module" | "directory" }>) {
+}: NodeProps<{
+  label: string;
+  tone?: "module" | "directory";
+  inboundTotal?: number;
+  outboundTotal?: number;
+  inboundLines?: string[];
+  outboundLines?: string[];
+}>) {
   const isModuleFrame = data.tone === "module";
+  const showCallPanel =
+    isModuleFrame &&
+    ((data.inboundTotal ?? 0) > 0 ||
+      (data.outboundTotal ?? 0) > 0 ||
+      (data.inboundLines?.length ?? 0) > 0 ||
+      (data.outboundLines?.length ?? 0) > 0);
   return (
     <div
       className={`pointer-events-none flex h-full w-full flex-col overflow-hidden rounded-lg border shadow-sm ${
@@ -249,12 +429,60 @@ function GroupFrameNode({
       >
         {data.label}
       </div>
-      <div className="min-h-0 flex-1 bg-transparent" aria-hidden />
+      {showCallPanel ? (
+        <div className="pointer-events-auto flex min-h-0 flex-1 flex-col gap-0.5 overflow-hidden px-1.5 pb-1 pt-0.5 text-[10px] text-zinc-600">
+          <div className="shrink-0 font-medium text-zinc-700">
+            Import-linked calls: {data.inboundTotal ?? 0} in · {data.outboundTotal ?? 0} out
+          </div>
+          {(data.outboundLines?.length ?? 0) + (data.inboundLines?.length ?? 0) > 0 ? (
+            <ul className="min-h-0 flex-1 list-none space-y-0.5 overflow-y-auto font-mono leading-tight text-zinc-600">
+              {data.outboundLines?.map((line, i) => (
+                <li key={`o-${i}`} className="truncate" title={line}>
+                  ↗ {line}
+                </li>
+              ))}
+              {data.inboundLines?.map((line, i) => (
+                <li key={`i-${i}`} className="truncate" title={line}>
+                  ↙ {line}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 bg-transparent" aria-hidden />
+      )}
     </div>
   );
 }
 
-const archMapNodeTypes = { groupFrame: GroupFrameNode };
+function ModuleTileNode({
+  data,
+}: NodeProps<{ label: string; subtitle?: string; risk?: string; inCycle?: boolean }>) {
+  const border = data.inCycle
+    ? "border-red-500"
+    : data.risk === "high"
+      ? "border-red-400"
+      : data.risk === "medium"
+        ? "border-amber-400"
+        : "border-emerald-500/80";
+  return (
+    <div
+      className={`rounded-lg border-2 bg-white px-3 py-2 shadow-sm ${border} min-w-[150px] max-w-[220px]`}
+    >
+      <div className="text-sm font-semibold text-zinc-900">{data.label}</div>
+      {data.subtitle ? (
+        <div className="mt-0.5 text-[10px] leading-tight text-zinc-500">{data.subtitle}</div>
+      ) : null}
+    </div>
+  );
+}
+
+const archMapNodeTypes = {
+  groupFrame: GroupFrameNode,
+  moduleTile: ModuleTileNode,
+  fileTile: FileTileNode,
+};
 
 function GraphFitView({ fitKey }: { fitKey: string }) {
   const { fitView } = useReactFlow();
@@ -271,12 +499,15 @@ function ArchMapFlow({
   rawGraph,
   violations,
   edgeFilter,
+  selectedFilePath,
   onNodeClick,
   onNodeDoubleClick,
 }: {
   rawGraph: GraphResponse | null;
   violations: ViolationRow[];
   edgeFilter: string;
+  /** Absolute path of the clicked file in file-level view; used to emphasize import edges. */
+  selectedFilePath: string | null;
   onNodeClick: (e: React.MouseEvent, n: Node) => void;
   onNodeDoubleClick: (e: React.MouseEvent, n: Node) => void;
 }) {
@@ -291,10 +522,11 @@ function ArchMapFlow({
       return { nodes: [] as Node[], edges: [] as Edge[] };
     }
     const { nodes: gn, edges: ge } = rawGraph;
+    const moduleCallSitePreview = rawGraph.moduleCallSitePreview;
 
     let rfNodes: Node[];
     if (useFileGroups) {
-      rfNodes = layoutFileGraphWithGroups(gn);
+      rfNodes = layoutFileGraphWithGroups(gn, ge, moduleCallSitePreview);
     } else {
       const pos = new Map<string, { x: number; y: number }>();
       const cellX = isModuleGraph ? 220 : 180;
@@ -307,43 +539,98 @@ function ArchMapFlow({
 
       rfNodes = gn.map((n) => ({
         id: n.id,
+        type: isModuleGraph ? ("moduleTile" as const) : undefined,
         position: pos.get(n.id) ?? { x: 0, y: 0 },
-        data: { label: n.name },
-        style: {
-          border:
-            isModuleGraph && cycleIds.has(n.id)
-              ? "2px solid #ef4444"
-              : `2px solid ${riskColor(n.risk)}`,
-          borderRadius: 8,
-          padding: isModuleGraph ? 8 : 6,
-          fontSize: isModuleGraph ? 13 : 11,
-          maxWidth: isModuleGraph ? undefined : 160,
-          background: "#fafafa",
-        },
+        data: isModuleGraph
+          ? {
+              label: n.name,
+              subtitle: n.callSiteSummary,
+              risk: n.risk,
+              inCycle: cycleIds.has(n.id),
+            }
+          : { label: n.name },
+        style: isModuleGraph
+          ? { zIndex: 1 }
+          : {
+              border:
+                isModuleGraph && cycleIds.has(n.id)
+                  ? "2px solid #ef4444"
+                  : `2px solid ${riskColor(n.risk)}`,
+              borderRadius: 8,
+              padding: isModuleGraph ? 8 : 6,
+              fontSize: isModuleGraph ? 13 : 11,
+              maxWidth: isModuleGraph ? undefined : 160,
+              background: "#fafafa",
+            },
       }));
     }
 
+    const isFileLevel = rawGraph.level === "file";
+    const sel = selectedFilePath ? filePathKey(selectedFilePath) : null;
+    const FILE_EDGE_STROKE = "#0f172a";
+    const FILE_EDGE_WIDTH = 2.5;
     const rfEdges: Edge[] = ge
       .filter((e) => edgeFilter === "all" || e.type === edgeFilter)
-      .map((e) => ({
-        id: e.id,
-        source: e.source,
-        target: e.target,
-        label:
-          isModuleGraph && typeof e.evidenceCount === "number"
-            ? `${e.type} · ev ${e.evidenceCount}`
-            : e.type,
-        markerEnd: { type: MarkerType.ArrowClosed },
-        style: isModuleGraph
-          ? {
-              stroke: `rgba(71, 85, 105, ${0.3 + (e.evidenceDensity ?? 0) * 0.7})`,
-              strokeWidth: 1 + (e.strength ?? 0) * 4,
-            }
-          : { stroke: "#64748b" },
-      }));
+      .map((e) => {
+        const srcK = filePathKey(e.source);
+        const tgtK = filePathKey(e.target);
+        const isImport = e.type === "import";
+        const touchesSelection =
+          isFileLevel && sel && isImport && (srcK === sel || tgtK === sel);
+        const isOutgoingFromSelection = isFileLevel && sel && srcK === sel && isImport;
+        /** Keep edges above large group-frame nodes (frames use zIndex 0–1, files 2). */
+        const fileEdgeZ = isOutgoingFromSelection ? 12 : touchesSelection ? 10 : 6;
+        return {
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          label:
+            isModuleGraph && typeof e.evidenceCount === "number"
+              ? `${e.type} · ev ${e.evidenceCount}`
+              : isFileLevel
+                ? undefined
+                : e.type,
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            ...(isFileLevel
+              ? {
+                  width: 20,
+                  height: 20,
+                  color: isOutgoingFromSelection ? "#1d4ed8" : FILE_EDGE_STROKE,
+                }
+              : {}),
+          },
+          ...(isFileLevel
+            ? { sourcePosition: Position.Bottom, targetPosition: Position.Top }
+            : {}),
+          zIndex: isFileLevel ? fileEdgeZ : touchesSelection ? 3 : undefined,
+          style: isModuleGraph
+            ? {
+                stroke: `rgba(71, 85, 105, ${0.3 + (e.evidenceDensity ?? 0) * 0.7})`,
+                strokeWidth: 1 + (e.strength ?? 0) * 4,
+              }
+            : isFileLevel
+              ? isOutgoingFromSelection
+                ? {
+                    stroke: "#1d4ed8",
+                    strokeWidth: 3.5,
+                    opacity: 1,
+                  }
+                : {
+                    stroke: FILE_EDGE_STROKE,
+                    strokeWidth: FILE_EDGE_WIDTH,
+                    opacity: 1,
+                  }
+              : {
+                  stroke: "#94a3b8",
+                  strokeWidth: 1,
+                  opacity: 0.75,
+                },
+        };
+      });
 
     return { nodes: rfNodes, edges: rfEdges };
-  }, [rawGraph, cycleIds, edgeFilter, isModuleGraph, useFileGroups]);
+  }, [rawGraph, cycleIds, edgeFilter, isModuleGraph, useFileGroups, selectedFilePath]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
@@ -575,7 +862,7 @@ export function ArchMapApp() {
         const moduleId = clicked?.moduleId ?? rawGraph?.focusModuleId;
         if (!moduleId) return;
         setSelectedModuleId(moduleId);
-        setSelectedFilePath(node.id);
+        setSelectedFilePath(clicked ? node.id : null);
         setTab("module");
         try {
           const res = await fetch(`/api/modules/${moduleId}`);
@@ -677,6 +964,7 @@ export function ArchMapApp() {
               rawGraph={rawGraph}
               violations={violations}
               edgeFilter={edgeFilter}
+              selectedFilePath={selectedFilePath}
               onNodeClick={onNodeClick}
               onNodeDoubleClick={onNodeDoubleClick}
             />
@@ -717,7 +1005,8 @@ export function ArchMapApp() {
                         : "all modules"}
                     </span>
                     . Files are grouped by module first, then by top-level subfolder cluster. Double-click a
-                    module on the map to zoom; click a file node to highlight it.
+                    module on the map to zoom; import arrows are always shown. Click a file to emphasize
+                    its outgoing imports in blue.
                   </p>
                 ) : (
                   <p className="text-xs text-zinc-600">
@@ -785,6 +1074,44 @@ export function ArchMapApp() {
                         ))}
                       </ul>
                     </div>
+                    {detail.importCallSites.inboundTotal + detail.importCallSites.outboundTotal > 0 ? (
+                      <div className="rounded border border-sky-200 bg-sky-50/80 p-2 text-xs text-zinc-800">
+                        <div className="font-semibold text-sky-900">Import-linked calls (static)</div>
+                        <p className="mt-1 text-[11px] text-zinc-600">
+                          Direct calls on imported bindings (and{" "}
+                          <code className="rounded bg-white/80 px-0.5">import * as x</code> roots). Caps
+                          apply; cross-boundary sites are prioritized.
+                        </p>
+                        <div className="mt-2 font-medium text-zinc-700">
+                          Outbound ({detail.importCallSites.outbound.length} shown
+                          {detail.importCallSites.outboundOmitted
+                            ? `, ${detail.importCallSites.outboundOmitted} omitted`
+                            : ""}{" "}
+                          · {detail.importCallSites.outboundTotal} total)
+                        </div>
+                        <ul className="mt-1 max-h-36 list-none space-y-1 overflow-y-auto font-mono text-[11px] text-zinc-700">
+                          {detail.importCallSites.outboundLines.map((line, i) => (
+                            <li key={`oc-${i}`} className="break-all border-b border-sky-100/80 pb-1 last:border-0">
+                              {line}
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="mt-2 font-medium text-zinc-700">
+                          Inbound ({detail.importCallSites.inbound.length} shown
+                          {detail.importCallSites.inboundOmitted
+                            ? `, ${detail.importCallSites.inboundOmitted} omitted`
+                            : ""}{" "}
+                          · {detail.importCallSites.inboundTotal} total)
+                        </div>
+                        <ul className="mt-1 max-h-36 list-none space-y-1 overflow-y-auto font-mono text-[11px] text-zinc-700">
+                          {detail.importCallSites.inboundLines.map((line, i) => (
+                            <li key={`ic-${i}`} className="break-all border-b border-sky-100/80 pb-1 last:border-0">
+                              {line}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
                     <div>
                       <div className="font-medium text-zinc-700">Files</div>
                       <ul className="mt-1 max-h-40 overflow-y-auto font-mono text-xs text-zinc-600">

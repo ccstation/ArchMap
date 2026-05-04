@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Project } from "ts-morph";
+import type { Project } from "ts-morph";
+import { Project as TsMorphProject } from "ts-morph";
 import type { CompilerOptions } from "typescript";
 import {
   ScriptTarget,
@@ -34,6 +35,8 @@ export interface FileGraphResult {
     importSpecifier: string;
   }[];
   fileScanInfos: FileScanInfo[];
+  /** Caller must call `project.forget()` when analysis is done. */
+  project: Project;
 }
 
 export function buildFileGraph(options: BuildFileGraphOptions): FileGraphResult {
@@ -53,7 +56,7 @@ export function buildFileGraph(options: BuildFileGraphOptions): FileGraphResult 
     skipLibCheck: true,
   };
 
-  const project = new Project({
+  const project = new TsMorphProject({
     ...(useTsconfig
       ? { tsConfigFilePath: tsconfigPath }
       : { compilerOptions: fallbackOptions }),
@@ -122,5 +125,5 @@ export function buildFileGraph(options: BuildFileGraphOptions): FileGraphResult 
     importSpecifier: e.importSpecifier || undefined,
   }));
 
-  return { fileDependencies, internalEdges, fileScanInfos };
+  return { fileDependencies, internalEdges, fileScanInfos, project };
 }
