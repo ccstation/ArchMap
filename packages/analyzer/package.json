@@ -1,0 +1,34 @@
+{
+  "name": "@archmap/analyzer",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "archmap-analyze": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "analyze": "node dist/cli.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@archmap/graph-model": "workspace:*",
+    "commander": "^13.0.0",
+    "fast-glob": "^3.3.3",
+    "ts-morph": "^25.0.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

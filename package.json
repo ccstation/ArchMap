@@ -1,0 +1,17 @@
+{
+  "name": "archmap",
+  "private": true,
+  "scripts": {
+    "build": "pnpm --filter @archmap/graph-model build && pnpm --filter @archmap/analyzer build && pnpm --filter @archmap/web build && pnpm --filter archview build",
+    "dev": "pnpm --filter @archmap/web dev",
+    "snapshot": "node ./packages/analyzer/dist/cli.js",
+    "archview": "pnpm --filter archview build && node ./packages/archview/dist/cli.js",
+    "test": "pnpm --filter @archmap/graph-model test && pnpm --filter @archmap/analyzer test",
+    "lint": "pnpm --filter @archmap/web lint",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  }
+}

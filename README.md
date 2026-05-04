@@ -109,14 +109,57 @@ ArchMap should differentiate by focusing on:
 
 ## Status
 
-This project is currently in planning.
+An MVP implementation is available in this repository: a **local-first** analyzer for TypeScript/JavaScript, a **Next.js** UI with an interactive module graph, REST APIs aligned with [API.md](API.md), and **optional OpenAI** summaries when `OPENAI_API_KEY` is set.
 
-Next steps:
-1. finalize PRD
-2. define MVP scope
-3. design system architecture
-4. choose tech stack
-5. create milestone roadmap
+## Development
+
+Requirements: **Node.js 20+**, **pnpm 9+**.
+
+```bash
+pnpm install
+pnpm dev
+```
+
+Open the web app (defaults to `http://localhost:3000`). Enter an **absolute path** to a repository on disk and run **Analyze**. Results stay in memory on the server process (typical for local development).
+
+### CLI snapshot
+
+From the repo root (after `pnpm build`):
+
+```bash
+pnpm snapshot /absolute/path/to/repo --out snapshot.json
+```
+
+This runs `packages/analyzer`’s CLI (`archmap-analyze`), which writes a JSON snapshot. Requires `pnpm build` first so `packages/analyzer/dist/cli.js` exists.
+
+### Optional AI summaries
+
+Set `OPENAI_API_KEY` in the environment when running `pnpm dev`. The UI shows **Generate AI summaries** when the key is present. Summaries use **paths and dependency stats only**, not full file contents.
+
+Optional: `OPENAI_MODEL` (defaults to `gpt-4o-mini`).
+
+### Layout
+
+- `packages/graph-model` — Zod schemas and shared types
+- `packages/analyzer` — ingestion, ts-morph import graph, module inference, rules
+- `apps/web` — Next.js App Router, `/api/*` routes, React Flow UI
+- `fixtures/mini-repo` — tiny sample repo used in tests
+
+### Commands
+
+| Command | Description |
+|--------|-------------|
+| `pnpm dev` | Next.js dev server |
+| `pnpm build` | Build all workspace packages |
+| `pnpm test` | Vitest in graph-model + analyzer |
+| `pnpm typecheck` | Typecheck (when configured per package) |
+
+### Known limitations (MVP)
+
+- Module inference is **folder-first** under `src/` (or top-level folders when no `src/`).
+- Import resolution follows **ts-morph** and your `tsconfig`; path aliases may be incomplete in edge cases.
+- Analysis results in the web UI are **in-memory** and reset when the server restarts.
+- Large repositories may need longer scan times; there is no background job queue yet.
 
 ## Working repo description
 

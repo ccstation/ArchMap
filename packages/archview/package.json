@@ -1,0 +1,31 @@
+{
+  "name": "archview",
+  "version": "0.1.0",
+  "description": "CLI to analyze a codebase and browse its architecture map in the browser",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "archview": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "web-standalone"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node ./scripts/stage-standalone.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@archmap/analyzer": "workspace:*",
+    "@archmap/graph-model": "workspace:*",
+    "commander": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3"
+  },
+  "keywords": ["architecture", "dependency-graph", "cli"],
+  "license": "MIT"
+}
