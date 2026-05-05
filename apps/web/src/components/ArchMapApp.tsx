@@ -952,6 +952,32 @@ const archMapNodeTypes = {
 };
 
 const NODE_POSITION_STORAGE_KEY = "archmap.node-positions.v1";
+const SURFACE_STORAGE_KEY = "archmap.surface.v1";
+const ROUTE_DIR_EXPANDED_STORAGE_KEY = "archmap.route-dir-expanded.v1";
+
+function readPersistedSurface(): "architecture" | "routes" {
+  if (typeof window === "undefined") return "architecture";
+  try {
+    const value = window.localStorage.getItem(SURFACE_STORAGE_KEY);
+    return value === "routes" ? "routes" : "architecture";
+  } catch {
+    return "architecture";
+  }
+}
+
+function readPersistedRouteDirExpanded(): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(ROUTE_DIR_EXPANDED_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    const prefixes = parsed.filter((item): item is string => typeof item === "string");
+    return new Set(prefixes);
+  } catch {
+    return new Set();
+  }
+}
 
 function readPersistedNodePositions(layoutKey: string): Map<string, { x: number; y: number }> {
   if (!layoutKey || typeof window === "undefined") return new Map();
@@ -1286,7 +1312,7 @@ export function ArchMapApp() {
   const [tab, setTab] = useState<"module" | "seams" | "violations">("module");
   const [edgeFilter, setEdgeFilter] = useState<string>("all");
 
-  const [surface, setSurface] = useState<"architecture" | "routes">("architecture");
+  const [surface, setSurface] = useState<"architecture" | "routes">(() => readPersistedSurface());
   const [routesBaseline, setRoutesBaseline] = useState<GraphResponse | null>(null);
   const [routesBusy, setRoutesBusy] = useState(false);
   const [routesLoadError, setRoutesLoadError] = useState<string | null>(null);
@@ -1294,7 +1320,9 @@ export function ArchMapApp() {
   const [selectedRoutePageAbs, setSelectedRoutePageAbs] = useState<string | null>(null);
   const [routeGlobalDepth, setRouteGlobalDepth] = useState(2);
   const [routeExpandedAbs, setRouteExpandedAbs] = useState<string[]>([]);
-  const [routeDirExpanded, setRouteDirExpanded] = useState<Set<string>>(() => new Set());
+  const [routeDirExpanded, setRouteDirExpanded] = useState<Set<string>>(
+    () => readPersistedRouteDirExpanded(),
+  );
 
   const surfaceRef = useRef(surface);
   surfaceRef.current = surface;
@@ -1453,12 +1481,31 @@ export function ArchMapApp() {
     setSelectedRoutePageAbs(null);
     setRoutePathFilter("");
     setRouteExpandedAbs([]);
-    setRouteDirExpanded(new Set());
-    setSurface("architecture");
     void loadAll(repositoryId).catch((e: unknown) =>
       setError(e instanceof Error ? e.message : String(e)),
     );
   }, [repositoryId, loadAll]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(SURFACE_STORAGE_KEY, surface);
+    } catch {
+      // Ignore storage failures and continue with in-memory state.
+    }
+  }, [surface]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        ROUTE_DIR_EXPANDED_STORAGE_KEY,
+        JSON.stringify([...routeDirExpanded].sort()),
+      );
+    } catch {
+      // Ignore storage failures and continue with in-memory state.
+    }
+  }, [routeDirExpanded]);
 
   useEffect(() => {
     setRouteExpandedAbs([]);
