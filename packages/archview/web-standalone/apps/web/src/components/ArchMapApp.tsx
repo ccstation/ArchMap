@@ -8,6 +8,7 @@ import ReactFlow, {
   Handle,
   MiniMap,
   ReactFlowProvider,
+  applyNodeChanges,
   useEdgesState,
   useNodesState,
   useReactFlow,
@@ -15,6 +16,7 @@ import ReactFlow, {
   type Connection,
   type Edge,
   type Node,
+  type NodeChange,
   type NodeProps,
   MarkerType,
   Position,
@@ -151,6 +153,39 @@ const FILE_MODULE_V_GAP = 44;
 
 function filePathKey(p: string): string {
   return p.replace(/\\/g, "/");
+}
+
+/** Pick side handles so edges leave/arrive along the vector between file tiles (not forced vertical). */
+function pickFileEdgeHandles(
+  sourceId: string,
+  targetId: string,
+  nodeById: Map<string, Node>,
+): { sourceHandle: string; targetHandle: string } | null {
+  const a = nodeById.get(sourceId);
+  const b = nodeById.get(targetId);
+  if (a?.type !== "fileTile" || b?.type !== "fileTile") return null;
+  const aw =
+    typeof a.style?.width === "number" ? a.style.width : FILE_CELL_W - 6;
+  const bw =
+    typeof b.style?.width === "number" ? b.style.width : FILE_CELL_W - 6;
+  const ap = a.position;
+  const bp = b.position;
+  const scx = ap.x + aw / 2;
+  const scy = ap.y + FILE_CELL_H / 2;
+  const tcx = bp.x + bw / 2;
+  const tcy = bp.y + FILE_CELL_H / 2;
+  const dx = tcx - scx;
+  const dy = tcy - scy;
+  let sSide: "top" | "right" | "bottom" | "left";
+  let tSide: "top" | "right" | "bottom" | "left";
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    sSide = dx >= 0 ? "right" : "left";
+    tSide = dx >= 0 ? "left" : "right";
+  } else {
+    sSide = dy >= 0 ? "bottom" : "top";
+    tSide = dy >= 0 ? "top" : "bottom";
+  }
+  return { sourceHandle: `src-${sSide}`, targetHandle: `tgt-${tSide}` };
 }
 
 /** Route list: App Router `page` entry files only (not layout/route). */
@@ -757,7 +792,31 @@ function FileTileNode({
       <Handle
         type="target"
         position={Position.Top}
+        id="tgt-top"
         className="!h-2 !w-2 !border-0 !bg-slate-500"
+        aria-label="Import target"
+      />
+      <Handle
+        type="target"
+        position={Position.Right}
+        id="tgt-right"
+        className="!h-2 !w-2 !border-0 !bg-slate-500"
+        style={{ top: "50%" }}
+        aria-label="Import target"
+      />
+      <Handle
+        type="target"
+        position={Position.Bottom}
+        id="tgt-bottom"
+        className="!h-2 !w-2 !border-0 !bg-slate-500"
+        aria-label="Import target"
+      />
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="tgt-left"
+        className="!h-2 !w-2 !border-0 !bg-slate-500"
+        style={{ top: "50%" }}
         aria-label="Import target"
       />
       <div className="truncate text-[11px] font-semibold leading-tight text-zinc-900">{data.label}</div>
@@ -771,8 +830,32 @@ function FileTileNode({
       ) : null}
       <Handle
         type="source"
-        position={Position.Bottom}
+        position={Position.Top}
+        id="src-top"
         className="!h-2 !w-2 !border-0 !bg-slate-500"
+        aria-label="Import source"
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="src-right"
+        className="!h-2 !w-2 !border-0 !bg-slate-500"
+        style={{ top: "50%" }}
+        aria-label="Import source"
+      />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        id="src-bottom"
+        className="!h-2 !w-2 !border-0 !bg-slate-500"
+        aria-label="Import source"
+      />
+      <Handle
+        type="source"
+        position={Position.Left}
+        id="src-left"
+        className="!h-2 !w-2 !border-0 !bg-slate-500"
+        style={{ top: "50%" }}
         aria-label="Import source"
       />
     </div>
@@ -868,6 +951,38 @@ const archMapNodeTypes = {
   fileTile: FileTileNode,
 };
 
+const NODE_POSITION_STORAGE_KEY = "archmap.node-positions.v1";
+
+function readPersistedNodePositions(layoutKey: string): Map<string, { x: number; y: number }> {
+  if (!layoutKey || typeof window === "undefined") return new Map();
+  try {
+    const raw = window.localStorage.getItem(NODE_POSITION_STORAGE_KEY);
+    if (!raw) return new Map();
+    const parsed = JSON.parse(raw) as Record<string, Record<string, { x: number; y: number }>>;
+    const byNodeId = parsed[layoutKey];
+    if (!byNodeId) return new Map();
+    return new Map(Object.entries(byNodeId));
+  } catch {
+    return new Map();
+  }
+}
+
+function persistNodePositions(layoutKey: string, nodes: Node[]): void {
+  if (!layoutKey || typeof window === "undefined") return;
+  try {
+    const raw = window.localStorage.getItem(NODE_POSITION_STORAGE_KEY);
+    const parsed = raw
+      ? (JSON.parse(raw) as Record<string, Record<string, { x: number; y: number }>>)
+      : {};
+    const positions: Record<string, { x: number; y: number }> = {};
+    for (const node of nodes) positions[node.id] = node.position;
+    parsed[layoutKey] = positions;
+    window.localStorage.setItem(NODE_POSITION_STORAGE_KEY, JSON.stringify(parsed));
+  } catch {
+    // Ignore storage failures; flow should still work with in-memory positions.
+  }
+}
+
 function GraphFitView({ fitKey }: { fitKey: string }) {
   const { fitView } = useReactFlow();
   useEffect(() => {
@@ -910,11 +1025,15 @@ function ArchMapFlow({
     rawGraph?.level === "file" &&
     Boolean(rawGraph?.nodes.some((n) => n.moduleId)) &&
     !forceFlatFileLayout;
+  const layoutKey = `${rawGraph?.snapshotId ?? ""}-${rawGraph?.level ?? ""}-${rawGraph?.focusModuleId ?? ""}-${forceFlatFileLayout ? "flat" : "grouped"}-${flatLayoutRootId ?? ""}`;
+  const [positionStorageVersion, setPositionStorageVersion] = useState(0);
+  const persistedPositions = useMemo(
+    () => readPersistedNodePositions(layoutKey),
+    [layoutKey, positionStorageVersion],
+  );
 
-  const initial = useMemo(() => {
-    if (!rawGraph) {
-      return { nodes: [] as Node[], edges: [] as Edge[] };
-    }
+  const baseNodes = useMemo<Node[]>(() => {
+    if (!rawGraph) return [] as Node[];
     const { nodes: gn, edges: ge } = rawGraph;
     const moduleCallSitePreview = rawGraph.moduleCallSitePreview;
 
@@ -981,11 +1100,31 @@ function ArchMapFlow({
               },
       }));
     }
+    if (persistedPositions.size > 0) {
+      rfNodes = rfNodes.map((node) => {
+        const persisted = persistedPositions.get(node.id);
+        return persisted ? { ...node, position: persisted } : node;
+      });
+    }
+    return rfNodes;
+  }, [
+    rawGraph,
+    cycleIds,
+    isModuleGraph,
+    useFileGroups,
+    forceFlatFileLayout,
+    flatLayoutRootId,
+    persistedPositions,
+  ]);
 
+  const initialEdges = useMemo<Edge[]>(() => {
+    if (!rawGraph) return [] as Edge[];
+    const ge = rawGraph.edges;
     const isFileLevel = rawGraph.level === "file";
     const sel = selectedFilePath ? filePathKey(selectedFilePath) : null;
     const FILE_EDGE_STROKE = "#0f172a";
     const FILE_EDGE_WIDTH = 2.5;
+    const nodeById = new Map(baseNodes.map((n) => [n.id, n]));
     const rfEdges: Edge[] = ge
       .filter((e) => edgeFilter === "all" || e.type === edgeFilter)
       .map((e) => {
@@ -997,6 +1136,8 @@ function ArchMapFlow({
         const isOutgoingFromSelection = isFileLevel && sel && srcK === sel && isImport;
         /** Keep edges above large group-frame nodes (frames use zIndex 0–1, files 2). */
         const fileEdgeZ = isOutgoingFromSelection ? 12 : touchesSelection ? 10 : 6;
+        const fileHandles =
+          isFileLevel ? pickFileEdgeHandles(e.source, e.target, nodeById) : null;
         return {
           id: e.id,
           source: e.source,
@@ -1009,16 +1150,22 @@ function ArchMapFlow({
                 : e.type,
           markerEnd: {
             type: MarkerType.ArrowClosed,
+            orient: "auto",
+            width: isFileLevel ? 14 : 12,
+            height: isFileLevel ? 14 : 12,
             ...(isFileLevel
               ? {
-                  width: 20,
-                  height: 20,
                   color: isOutgoingFromSelection ? "#1d4ed8" : FILE_EDGE_STROKE,
                 }
               : {}),
           },
           ...(isFileLevel
-            ? { sourcePosition: Position.Bottom, targetPosition: Position.Top }
+            ? fileHandles
+              ? {
+                  sourceHandle: fileHandles.sourceHandle,
+                  targetHandle: fileHandles.targetHandle,
+                }
+              : { sourcePosition: Position.Bottom, targetPosition: Position.Top }
             : {}),
           zIndex: isFileLevel ? fileEdgeZ : touchesSelection ? 3 : undefined,
           style: isModuleGraph
@@ -1045,30 +1192,50 @@ function ArchMapFlow({
                 },
         };
       });
-
-    return { nodes: rfNodes, edges: rfEdges };
+    return rfEdges;
   }, [
     rawGraph,
-    cycleIds,
     edgeFilter,
     isModuleGraph,
-    useFileGroups,
     selectedFilePath,
-    forceFlatFileLayout,
-    flatLayoutRootId,
+    baseNodes,
   ]);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
+  const [nodes, setNodes] = useNodesState<Node>(baseNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialEdges);
+  const nodesRef = useRef(nodes);
 
   useEffect(() => {
-    setNodes(initial.nodes);
-    setEdges(initial.edges);
-  }, [initial.nodes, initial.edges, setEdges, setNodes]);
+    setNodes(baseNodes);
+  }, [baseNodes, setNodes]);
+
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
+  useEffect(() => {
+    setEdges(initialEdges);
+  }, [initialEdges, setEdges]);
 
   const onConnect = useCallback(
     (params: Connection) => setEdges((eds) => addEdge(params, eds)),
     [setEdges],
+  );
+  const onNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      setNodes((currentNodes) => applyNodeChanges(changes, currentNodes));
+    },
+    [setNodes],
+  );
+  const onNodeDragStop = useCallback(
+    (_event: React.MouseEvent | TouchEvent, draggedNode: Node) => {
+      const nextNodes = nodesRef.current.map((node) =>
+        node.id === draggedNode.id ? { ...node, position: draggedNode.position } : node,
+      );
+      persistNodePositions(layoutKey, nextNodes);
+      setPositionStorageVersion((v) => v + 1);
+    },
+    [layoutKey],
   );
 
   const fitKey = `${rawGraph?.snapshotId ?? ""}-${rawGraph?.level ?? ""}-${rawGraph?.focusModuleId ?? ""}${fitKeySuffix}`;
@@ -1083,6 +1250,7 @@ function ArchMapFlow({
       onConnect={onConnect}
       onNodeClick={onNodeClick}
       onNodeDoubleClick={onNodeDoubleClick}
+      onNodeDragStop={onNodeDragStop}
       minZoom={0.05}
       maxZoom={2}
       proOptions={{ hideAttribution: true }}
