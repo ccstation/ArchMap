@@ -153,6 +153,306 @@ function filePathKey(p: string): string {
   return p.replace(/\\/g, "/");
 }
 
+/** Route list: App Router `page` entry files only (not layout/route). */
+function isAppRouterPageFile(relPath: string): boolean {
+  const lower = relPath.replace(/\\/g, "/").toLowerCase();
+  return (
+    /(^|\/)app\/.*\/page\.(m|c)?(t|j)sx?$/.test(lower) ||
+    /(^|\/)src\/app\/.*\/page\.(m|c)?(t|j)sx?$/.test(lower)
+  );
+}
+
+function isPagesRouterPageFile(relPath: string): boolean {
+  const lower = relPath.replace(/\\/g, "/").toLowerCase();
+  if (!/(^|\/)pages\//.test(lower)) return false;
+  const seg = lower.split("/").pop() ?? "";
+  if (/^_(app|document)\.(m|c)?(t|j)sx?$/.test(seg)) return false;
+  return /\.(m|c)?(t|j)sx?$/.test(lower);
+}
+
+function isRoutePageListFile(relPath: string): boolean {
+  return isAppRouterPageFile(relPath) || isPagesRouterPageFile(relPath);
+}
+
+interface RouteTreeDir {
+  kind: "dir";
+  segment: string;
+  /** Path from repo root through this segment (no trailing slash). */
+  fullPrefix: string;
+  children: RouteTreeNode[];
+}
+
+interface RouteTreeFile {
+  kind: "file";
+  segment: string;
+  relPath: string;
+  absId: string;
+  moduleLabel?: string;
+}
+
+type RouteTreeNode = RouteTreeDir | RouteTreeFile;
+
+function insertRoutePageIntoTree(
+  root: RouteTreeDir,
+  relPath: string,
+  absId: string,
+  moduleLabel?: string,
+): void {
+  const parts = filePathKey(relPath).split("/").filter(Boolean);
+  if (parts.length === 0) return;
+  let current = root;
+  let pathSoFar = "";
+  for (let i = 0; i < parts.length; i++) {
+    const seg = parts[i]!;
+    const isLast = i === parts.length - 1;
+    pathSoFar = pathSoFar ? `${pathSoFar}/${seg}` : seg;
+    if (isLast) {
+      current.children.push({
+        kind: "file",
+        segment: seg,
+        relPath: filePathKey(relPath),
+        absId,
+        moduleLabel,
+      });
+      return;
+    }
+    let dir = current.children.find(
+      (c): c is RouteTreeDir => c.kind === "dir" && c.segment === seg,
+    );
+    if (!dir) {
+      dir = { kind: "dir", segment: seg, fullPrefix: pathSoFar, children: [] };
+      current.children.push(dir);
+    }
+    current = dir;
+  }
+}
+
+function sortRouteTreeNodes(nodes: RouteTreeNode[]): void {
+  nodes.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "dir" ? -1 : 1;
+    return a.segment.localeCompare(b.segment);
+  });
+  for (const n of nodes) {
+    if (n.kind === "dir") sortRouteTreeNodes(n.children);
+  }
+}
+
+function filterRouteTreeBySubstring(nodes: RouteTreeNode[], needle: string): RouteTreeNode[] {
+  const q = needle.trim().toLowerCase();
+  if (!q) return nodes;
+  const out: RouteTreeNode[] = [];
+  for (const n of nodes) {
+    if (n.kind === "file") {
+      if (n.relPath.toLowerCase().includes(q)) out.push(n);
+    } else {
+      const ch = filterRouteTreeBySubstring(n.children, q);
+      if (ch.length) out.push({ ...n, children: ch });
+    }
+  }
+  return out;
+}
+
+function collectAllDirPrefixesInTree(nodes: RouteTreeNode[]): string[] {
+  const out: string[] = [];
+  function walk(ns: RouteTreeNode[]) {
+    for (const n of ns) {
+      if (n.kind === "dir") {
+        out.push(n.fullPrefix);
+        walk(n.children);
+      }
+    }
+  }
+  walk(nodes);
+  return out;
+}
+
+function countPagesInRouteSubtree(nodes: RouteTreeNode[]): number {
+  let c = 0;
+  for (const n of nodes) {
+    if (n.kind === "file") c++;
+    else c += countPagesInRouteSubtree(n.children);
+  }
+  return c;
+}
+
+function routePathPrefixesForFile(relPath: string): string[] {
+  const parts = filePathKey(relPath).split("/").filter(Boolean);
+  const prefixes: string[] = [];
+  let acc = "";
+  for (let i = 0; i < parts.length - 1; i++) {
+    acc = acc ? `${acc}/${parts[i]}` : parts[i]!;
+    prefixes.push(acc);
+  }
+  return prefixes;
+}
+
+function RouteFolderTree({
+  nodes,
+  depth,
+  selectedAbs,
+  expandedPrefixes,
+  onToggleDir,
+  onSelectFile,
+}: {
+  nodes: RouteTreeNode[];
+  depth: number;
+  selectedAbs: string | null;
+  expandedPrefixes: Set<string>;
+  onToggleDir: (fullPrefix: string) => void;
+  onSelectFile: (absId: string) => void;
+}) {
+  return (
+    <ul className={depth > 0 ? "ml-2 border-l border-zinc-100 pl-2" : ""}>
+      {nodes.map((n) => {
+        if (n.kind === "dir") {
+          const pageCount = countPagesInRouteSubtree(n.children);
+          return (
+            <li key={n.fullPrefix || `root-${n.segment}`} className="py-0.5">
+              <button
+                type="button"
+                className="flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-[11px] text-zinc-800 hover:bg-zinc-100"
+                onClick={() => onToggleDir(n.fullPrefix)}
+              >
+                <span className="w-3 shrink-0 font-mono text-zinc-400">
+                  {expandedPrefixes.has(n.fullPrefix) ? "▾" : "▸"}
+                </span>
+                <span className="min-w-0 truncate font-medium">{n.segment || "·"}</span>
+                <span className="shrink-0 text-[10px] text-zinc-400">
+                  · {pageCount} page{pageCount === 1 ? "" : "s"}
+                </span>
+              </button>
+              {expandedPrefixes.has(n.fullPrefix) ? (
+                <RouteFolderTree
+                  nodes={n.children}
+                  depth={depth + 1}
+                  selectedAbs={selectedAbs}
+                  expandedPrefixes={expandedPrefixes}
+                  onToggleDir={onToggleDir}
+                  onSelectFile={onSelectFile}
+                />
+              ) : null}
+            </li>
+          );
+        }
+        return (
+          <li key={n.absId} className="py-0.5">
+            <div
+              className={`rounded border px-1.5 py-1 ${
+                selectedAbs && filePathKey(selectedAbs) === filePathKey(n.absId)
+                  ? "border-blue-200 bg-blue-50"
+                  : "border-transparent bg-transparent"
+              }`}
+            >
+              <button
+                type="button"
+                className="w-full text-left"
+                onClick={() => onSelectFile(n.absId)}
+              >
+                <div className="font-mono text-[11px] font-semibold text-zinc-900">{n.segment}</div>
+                {n.moduleLabel ? (
+                  <div className="truncate text-[10px] text-zinc-500" title={n.relPath}>
+                    {n.moduleLabel}
+                  </div>
+                ) : (
+                  <div className="truncate font-mono text-[10px] text-zinc-500" title={n.relPath}>
+                    {compactRepoPath(n.relPath, 44)}
+                  </div>
+                )}
+              </button>
+              <details className="mt-0.5 text-[10px] text-zinc-500">
+                <summary className="cursor-pointer select-none text-zinc-400 hover:text-zinc-700">
+                  Details
+                </summary>
+                <div className="mt-1 space-y-0.5 border-t border-zinc-100 pt-1 font-mono text-[10px] leading-snug text-zinc-600">
+                  {n.moduleLabel ? (
+                    <div>
+                      <span className="text-zinc-400">Module</span> {n.moduleLabel}
+                    </div>
+                  ) : null}
+                  <div className="break-all">{n.relPath}</div>
+                </div>
+              </details>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function buildRouteFileSubgraph(
+  full: GraphResponse,
+  rootAbs: string,
+  globalDepth: number,
+  expandedNodes: Set<string>,
+): GraphResponse {
+  const rootK = filePathKey(rootAbs);
+  const idK = (id: string) => filePathKey(id);
+  const nodeByKey = new Map<string, GraphNode>();
+  for (const n of full.nodes) {
+    nodeByKey.set(idK(n.id), n);
+  }
+  if (!nodeByKey.has(rootK)) {
+    return {
+      snapshotId: full.snapshotId,
+      level: "file",
+      nodes: [],
+      edges: [],
+    };
+  }
+  const allKeys = new Set(nodeByKey.keys());
+  const outAdj = new Map<string, string[]>();
+  for (const e of full.edges) {
+    if (e.type !== "import") continue;
+    const s = idK(e.source);
+    const t = idK(e.target);
+    if (!allKeys.has(s) || !allKeys.has(t)) continue;
+    const arr = outAdj.get(s) ?? [];
+    arr.push(t);
+    outAdj.set(s, arr);
+  }
+  const dist = new Map<string, number>();
+  dist.set(rootK, 0);
+  const q: string[] = [rootK];
+  while (q.length) {
+    const u = q.shift()!;
+    const du = dist.get(u) ?? 0;
+    for (const v of outAdj.get(u) ?? []) {
+      if (dist.has(v)) continue;
+      const nv = du + 1;
+      if (nv > globalDepth) continue;
+      dist.set(v, nv);
+      q.push(v);
+    }
+  }
+  const visible = new Set<string>(dist.keys());
+  for (const ex of expandedNodes) {
+    const ek = idK(ex);
+    if (!nodeByKey.has(ek)) continue;
+    for (const v of outAdj.get(ek) ?? []) {
+      visible.add(v);
+    }
+  }
+  const visibleOrigIds = new Set<string>();
+  for (const k of visible) {
+    visibleOrigIds.add(nodeByKey.get(k)!.id);
+  }
+  const nodes = full.nodes.filter((n) => visibleOrigIds.has(n.id));
+  const nodeKeySet = new Set([...visible]);
+  const edges = full.edges.filter((e) => {
+    if (e.type !== "import") return false;
+    return nodeKeySet.has(idK(e.source)) && nodeKeySet.has(idK(e.target));
+  });
+  return {
+    snapshotId: full.snapshotId,
+    level: "file",
+    focusModuleId: full.focusModuleId,
+    nodes,
+    edges,
+    moduleCallSitePreview: full.moduleCallSitePreview,
+  };
+}
+
 function compactRepoPath(filePath: string, maxLen = 52): string {
   const p = filePath.replace(/\\/g, "/");
   if (p.length <= maxLen) return p;
@@ -184,6 +484,90 @@ function importLayersForFiles(
     }
   }
   return layer;
+}
+
+/** Flat route canvas: root page at top, each import hop one row down (BFS from root along import edges). */
+function layoutFlatImportGraphFromRoot(
+  gn: GraphNode[],
+  edges: { source: string; target: string; type?: string }[],
+  rootId: string,
+): Map<string, { x: number; y: number }> {
+  const pos = new Map<string, { x: number; y: number }>();
+  const rootKey = filePathKey(rootId);
+  const rootNode = gn.find((n) => filePathKey(n.id) === rootKey);
+
+  if (!rootNode || gn.length === 0) {
+    gn.forEach((n, i) => {
+      const col = i % 6;
+      const row = Math.floor(i / 6);
+      pos.set(n.id, { x: 40 + col * 200, y: 40 + row * 100 });
+    });
+    return pos;
+  }
+
+  const ids = new Set(gn.map((n) => n.id));
+  const importEdges = edges.filter((e) => e.type === "import");
+  const outAdj = new Map<string, string[]>();
+  for (const id of ids) outAdj.set(id, []);
+  for (const e of importEdges) {
+    if (!ids.has(e.source) || !ids.has(e.target)) continue;
+    outAdj.get(e.source)!.push(e.target);
+  }
+
+  const depth = new Map<string, number>();
+  depth.set(rootNode.id, 0);
+  const q: string[] = [rootNode.id];
+  while (q.length) {
+    const u = q.shift()!;
+    const du = depth.get(u)!;
+    for (const v of outAdj.get(u) ?? []) {
+      const nd = du + 1;
+      if (!depth.has(v) || nd < depth.get(v)!) {
+        depth.set(v, nd);
+        q.push(v);
+      }
+    }
+  }
+
+  let maxReachable = 0;
+  for (const n of gn) {
+    if (depth.has(n.id)) maxReachable = Math.max(maxReachable, depth.get(n.id)!);
+  }
+  for (const n of gn) {
+    if (!depth.has(n.id)) depth.set(n.id, maxReachable + 1);
+  }
+
+  const byDepth = new Map<number, GraphNode[]>();
+  for (const n of gn) {
+    const d = depth.get(n.id)!;
+    const arr = byDepth.get(d) ?? [];
+    arr.push(n);
+    byDepth.set(d, arr);
+  }
+  for (const arr of byDepth.values()) arr.sort((a, b) => a.name.localeCompare(b.name));
+
+  const depthKeys = [...byDepth.keys()].sort((a, b) => a - b);
+  let maxRowLen = 1;
+  for (const d of depthKeys) {
+    maxRowLen = Math.max(maxRowLen, byDepth.get(d)!.length);
+  }
+  const canvasInnerW = maxRowLen * FILE_CELL_W;
+  const PAD_X = 48;
+  const PAD_Y = 40;
+
+  for (const d of depthKeys) {
+    const row = byDepth.get(d)!;
+    const rowW = row.length * FILE_CELL_W;
+    const rowStartX = PAD_X + Math.max(0, (canvasInnerW - rowW) / 2);
+    row.forEach((n, i) => {
+      pos.set(n.id, {
+        x: rowStartX + i * FILE_CELL_W,
+        y: PAD_Y + d * FILE_CELL_H,
+      });
+    });
+  }
+
+  return pos;
 }
 
 function layoutFileGraphWithGroups(
@@ -502,6 +886,9 @@ function ArchMapFlow({
   selectedFilePath,
   onNodeClick,
   onNodeDoubleClick,
+  forceFlatFileLayout = false,
+  flatLayoutRootId = null,
+  fitKeySuffix = "",
 }: {
   rawGraph: GraphResponse | null;
   violations: ViolationRow[];
@@ -510,12 +897,19 @@ function ArchMapFlow({
   selectedFilePath: string | null;
   onNodeClick: (e: React.MouseEvent, n: Node) => void;
   onNodeDoubleClick: (e: React.MouseEvent, n: Node) => void;
+  /** When true at file level, skip module/directory frames (e.g. route dependency subgraph). */
+  forceFlatFileLayout?: boolean;
+  /** Selected route page path: flat layout stacks nodes top-down from this root. */
+  flatLayoutRootId?: string | null;
+  /** Appended to auto fit-view key (e.g. route selection + depth). */
+  fitKeySuffix?: string;
 }) {
   const cycleIds = useMemo(() => cycleIdsFromViolations(violations), [violations]);
   const isModuleGraph = rawGraph?.level === "module";
   const useFileGroups =
     rawGraph?.level === "file" &&
-    Boolean(rawGraph?.nodes.some((n) => n.moduleId));
+    Boolean(rawGraph?.nodes.some((n) => n.moduleId)) &&
+    !forceFlatFileLayout;
 
   const initial = useMemo(() => {
     if (!rawGraph) {
@@ -529,17 +923,31 @@ function ArchMapFlow({
       rfNodes = layoutFileGraphWithGroups(gn, ge, moduleCallSitePreview);
     } else {
       const pos = new Map<string, { x: number; y: number }>();
-      const cellX = isModuleGraph ? 220 : 180;
-      const cellY = isModuleGraph ? 120 : 90;
-      gn.forEach((n, i) => {
-        const col = i % 6;
-        const row = Math.floor(i / 6);
-        pos.set(n.id, { x: col * cellX, y: row * cellY });
-      });
+      const flatRoot =
+        forceFlatFileLayout && rawGraph.level === "file" ? flatLayoutRootId : null;
+      const isRouteLikeFlat = Boolean(flatRoot);
+      if (flatRoot) {
+        const layoutPos = layoutFlatImportGraphFromRoot(gn, ge, flatRoot);
+        for (const n of gn) {
+          pos.set(n.id, layoutPos.get(n.id) ?? { x: 0, y: 0 });
+        }
+      } else {
+        const cellX = isModuleGraph ? 220 : 180;
+        const cellY = isModuleGraph ? 120 : 90;
+        gn.forEach((n, i) => {
+          const col = i % 6;
+          const row = Math.floor(i / 6);
+          pos.set(n.id, { x: col * cellX, y: row * cellY });
+        });
+      }
 
       rfNodes = gn.map((n) => ({
         id: n.id,
-        type: isModuleGraph ? ("moduleTile" as const) : undefined,
+        type: isModuleGraph
+          ? ("moduleTile" as const)
+          : isRouteLikeFlat
+            ? ("fileTile" as const)
+            : undefined,
         position: pos.get(n.id) ?? { x: 0, y: 0 },
         data: isModuleGraph
           ? {
@@ -548,20 +956,29 @@ function ArchMapFlow({
               risk: n.risk,
               inCycle: cycleIds.has(n.id),
             }
-          : { label: n.name },
+          : isRouteLikeFlat
+            ? {
+                label: n.name,
+                subtitle: n.relativeFilePath ? compactRepoPath(n.relativeFilePath) : undefined,
+                pathTitle: n.relativeFilePath?.replace(/\\/g, "/"),
+                risk: n.risk,
+              }
+            : { label: n.name },
         style: isModuleGraph
           ? { zIndex: 1 }
-          : {
-              border:
-                isModuleGraph && cycleIds.has(n.id)
-                  ? "2px solid #ef4444"
-                  : `2px solid ${riskColor(n.risk)}`,
-              borderRadius: 8,
-              padding: isModuleGraph ? 8 : 6,
-              fontSize: isModuleGraph ? 13 : 11,
-              maxWidth: isModuleGraph ? undefined : 160,
-              background: "#fafafa",
-            },
+          : isRouteLikeFlat
+            ? { width: FILE_CELL_W - 6, zIndex: 2 }
+            : {
+                border:
+                  isModuleGraph && cycleIds.has(n.id)
+                    ? "2px solid #ef4444"
+                    : `2px solid ${riskColor(n.risk)}`,
+                borderRadius: 8,
+                padding: isModuleGraph ? 8 : 6,
+                fontSize: isModuleGraph ? 13 : 11,
+                maxWidth: isModuleGraph ? undefined : 160,
+                background: "#fafafa",
+              },
       }));
     }
 
@@ -630,7 +1047,16 @@ function ArchMapFlow({
       });
 
     return { nodes: rfNodes, edges: rfEdges };
-  }, [rawGraph, cycleIds, edgeFilter, isModuleGraph, useFileGroups, selectedFilePath]);
+  }, [
+    rawGraph,
+    cycleIds,
+    edgeFilter,
+    isModuleGraph,
+    useFileGroups,
+    selectedFilePath,
+    forceFlatFileLayout,
+    flatLayoutRootId,
+  ]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
@@ -645,7 +1071,7 @@ function ArchMapFlow({
     [setEdges],
   );
 
-  const fitKey = `${rawGraph?.snapshotId ?? ""}-${rawGraph?.level ?? ""}-${rawGraph?.focusModuleId ?? ""}`;
+  const fitKey = `${rawGraph?.snapshotId ?? ""}-${rawGraph?.level ?? ""}-${rawGraph?.focusModuleId ?? ""}${fitKeySuffix}`;
 
   return (
     <ReactFlow
@@ -692,6 +1118,19 @@ export function ArchMapApp() {
   const [tab, setTab] = useState<"module" | "seams" | "violations">("module");
   const [edgeFilter, setEdgeFilter] = useState<string>("all");
 
+  const [surface, setSurface] = useState<"architecture" | "routes">("architecture");
+  const [routesBaseline, setRoutesBaseline] = useState<GraphResponse | null>(null);
+  const [routesBusy, setRoutesBusy] = useState(false);
+  const [routesLoadError, setRoutesLoadError] = useState<string | null>(null);
+  const [routePathFilter, setRoutePathFilter] = useState("");
+  const [selectedRoutePageAbs, setSelectedRoutePageAbs] = useState<string | null>(null);
+  const [routeGlobalDepth, setRouteGlobalDepth] = useState(2);
+  const [routeExpandedAbs, setRouteExpandedAbs] = useState<string[]>([]);
+  const [routeDirExpanded, setRouteDirExpanded] = useState<Set<string>>(() => new Set());
+
+  const surfaceRef = useRef(surface);
+  surfaceRef.current = surface;
+
   const moduleNameById = useMemo(() => {
     const m = new Map<string, string>();
     for (const mod of modules) m.set(mod.id, mod.name);
@@ -719,6 +1158,52 @@ export function ArchMapApp() {
       .sort((a, b) => b.score - a.score)
       .slice(0, 8);
   }, [moduleFileCountById, seams]);
+
+  const routeExpandedSet = useMemo(() => new Set(routeExpandedAbs), [routeExpandedAbs]);
+
+  const routePageNodes = useMemo(() => {
+    if (!routesBaseline) return [];
+    const out: GraphNode[] = [];
+    for (const n of routesBaseline.nodes) {
+      const rel = n.relativeFilePath ?? "";
+      if (rel && isRoutePageListFile(rel)) out.push(n);
+    }
+    return out;
+  }, [routesBaseline]);
+
+  const routeTreeRootChildren = useMemo(() => {
+    if (!routesBaseline) return [];
+    const root: RouteTreeDir = { kind: "dir", segment: "", fullPrefix: "", children: [] };
+    for (const n of routePageNodes) {
+      const rel = n.relativeFilePath ?? "";
+      if (!rel) continue;
+      insertRoutePageIntoTree(root, rel, n.id, n.moduleLabel);
+    }
+    sortRouteTreeNodes(root.children);
+    return root.children;
+  }, [routesBaseline, routePageNodes]);
+
+  const filteredRouteTree = useMemo(
+    () => filterRouteTreeBySubstring(routeTreeRootChildren, routePathFilter),
+    [routeTreeRootChildren, routePathFilter],
+  );
+
+  const routeDisplayGraph = useMemo(() => {
+    if (!routesBaseline || !selectedRoutePageAbs) return null;
+    return buildRouteFileSubgraph(
+      routesBaseline,
+      selectedRoutePageAbs,
+      routeGlobalDepth,
+      routeExpandedSet,
+    );
+  }, [routesBaseline, selectedRoutePageAbs, routeGlobalDepth, routeExpandedSet]);
+
+  const routeFlowFitSuffix = useMemo(() => {
+    if (surface !== "routes") return "";
+    const ra = selectedRoutePageAbs ?? "none";
+    const ex = [...routeExpandedAbs].sort().join("|");
+    return `-route:${filePathKey(ra)}-${routeGlobalDepth}-${ex}`;
+  }, [surface, selectedRoutePageAbs, routeGlobalDepth, routeExpandedAbs]);
 
   const loadMeta = useCallback(async (rid: string) => {
     const [mRes, sRes, vRes] = await Promise.all([
@@ -753,6 +1238,22 @@ export function ArchMapApp() {
     setRawGraph(g);
   }, []);
 
+  const fetchRoutesBaseline = useCallback(async (rid: string) => {
+    setRoutesBusy(true);
+    setRoutesLoadError(null);
+    try {
+      const gRes = await fetch(`/api/repositories/${rid}/graph?level=file`);
+      if (!gRes.ok) throw new Error("Failed to load file graph for routes");
+      const g = (await gRes.json()) as GraphResponse;
+      setRoutesBaseline(g);
+    } catch (e: unknown) {
+      setRoutesBaseline(null);
+      setRoutesLoadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRoutesBusy(false);
+    }
+  }, []);
+
   const loadAll = useCallback(
     async (rid: string) => {
       await loadMeta(rid);
@@ -779,10 +1280,69 @@ export function ArchMapApp() {
     if (!repositoryId) return;
     setFileDrillModuleId(null);
     setSelectedFilePath(null);
+    setRoutesBaseline(null);
+    setRoutesLoadError(null);
+    setSelectedRoutePageAbs(null);
+    setRoutePathFilter("");
+    setRouteExpandedAbs([]);
+    setRouteDirExpanded(new Set());
+    setSurface("architecture");
     void loadAll(repositoryId).catch((e: unknown) =>
       setError(e instanceof Error ? e.message : String(e)),
     );
   }, [repositoryId, loadAll]);
+
+  useEffect(() => {
+    setRouteExpandedAbs([]);
+  }, [selectedRoutePageAbs]);
+
+  useEffect(() => {
+    if (!repositoryId || surface !== "routes") return;
+    if (routesBusy) return;
+    const sid = rawGraph?.snapshotId;
+    const needsFetch =
+      !routesBaseline || (Boolean(sid) && routesBaseline.snapshotId !== sid);
+    if (needsFetch) void fetchRoutesBaseline(repositoryId);
+  }, [
+    repositoryId,
+    surface,
+    rawGraph?.snapshotId,
+    routesBaseline,
+    routesBusy,
+    fetchRoutesBaseline,
+  ]);
+
+  useEffect(() => {
+    if (!selectedRoutePageAbs || !routesBaseline) return;
+    const k = filePathKey(selectedRoutePageAbs);
+    const exists = routesBaseline.nodes.some((n) => filePathKey(n.id) === k);
+    if (!exists) setSelectedRoutePageAbs(null);
+  }, [routesBaseline, selectedRoutePageAbs]);
+
+  useEffect(() => {
+    if (!selectedRoutePageAbs || !routesBaseline) return;
+    const gn = routesBaseline.nodes.find((n) => filePathKey(n.id) === filePathKey(selectedRoutePageAbs));
+    const rel = gn?.relativeFilePath;
+    if (!rel) return;
+    const prefixes = routePathPrefixesForFile(rel);
+    if (!prefixes.length) return;
+    setRouteDirExpanded((prev) => {
+      const next = new Set(prev);
+      for (const p of prefixes) next.add(p);
+      return next;
+    });
+  }, [selectedRoutePageAbs, routesBaseline]);
+
+  useEffect(() => {
+    if (!routePathFilter.trim()) return;
+    const extra = collectAllDirPrefixesInTree(filteredRouteTree);
+    if (!extra.length) return;
+    setRouteDirExpanded((prev) => {
+      const next = new Set(prev);
+      for (const p of extra) next.add(p);
+      return next;
+    });
+  }, [routePathFilter, filteredRouteTree]);
 
   const zoomIntoModule = useCallback(
     (moduleId: string) => {
@@ -813,6 +1373,27 @@ export function ArchMapApp() {
       setError(e instanceof Error ? e.message : String(e)),
     );
   }, [loadGraph, repositoryId]);
+
+  const openArchitectureSurface = useCallback(() => {
+    setSurface("architecture");
+    if (!repositoryId) return;
+    void loadGraph(repositoryId, { kind: "module" }).catch((e: unknown) =>
+      setError(e instanceof Error ? e.message : String(e)),
+    );
+  }, [loadGraph, repositoryId]);
+
+  const openRoutesSurface = useCallback(() => {
+    setSurface("routes");
+  }, []);
+
+  const toggleRouteDir = useCallback((fullPrefix: string) => {
+    setRouteDirExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(fullPrefix)) next.delete(fullPrefix);
+      else next.add(fullPrefix);
+      return next;
+    });
+  }, []);
 
   const refreshModuleDetail = useCallback(async (mid: string | null) => {
     if (!mid) return;
@@ -847,12 +1428,35 @@ export function ArchMapApp() {
             : { kind: "module" },
       );
       await refreshModuleDetail(selectedModuleId);
+      if (surfaceRef.current === "routes" && repositoryId) {
+        void fetchRoutesBaseline(repositoryId);
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setAiBusy(false);
     }
   };
+
+  const onRoutesNodeClick = useCallback(
+    async (_e: React.MouseEvent, node: Node) => {
+      if (!routeDisplayGraph) return;
+      const clicked = routeDisplayGraph.nodes.find((n) => n.id === node.id);
+      const moduleId = clicked?.moduleId ?? routeDisplayGraph.focusModuleId;
+      if (!moduleId) return;
+      setSelectedModuleId(moduleId);
+      setSelectedFilePath(clicked ? node.id : null);
+      setTab("module");
+      try {
+        const res = await fetch(`/api/modules/${moduleId}`);
+        if (!res.ok) throw new Error("Failed to load module");
+        setDetail((await res.json()) as ModuleDetail);
+      } catch {
+        setDetail(null);
+      }
+    },
+    [routeDisplayGraph],
+  );
 
   const onNodeClick = useCallback(
     async (_e: React.MouseEvent, node: Node) => {
@@ -903,6 +1507,28 @@ export function ArchMapApp() {
             Repository <code className="rounded bg-zinc-100 px-1">{repositoryId.slice(0, 8)}…</code>
           </span>
         ) : null}
+        {repositoryId ? (
+          <div className="flex rounded-md border border-zinc-200 bg-zinc-50 p-0.5 text-xs font-medium">
+            <button
+              type="button"
+              className={`rounded px-2.5 py-1.5 ${
+                surface === "architecture" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-600"
+              }`}
+              onClick={() => openArchitectureSurface()}
+            >
+              Architecture
+            </button>
+            <button
+              type="button"
+              className={`rounded px-2.5 py-1.5 ${
+                surface === "routes" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-600"
+              }`}
+              onClick={() => openRoutesSurface()}
+            >
+              Routes
+            </button>
+          </div>
+        ) : null}
         {repositoryId && aiEnabled ? (
           <button
             type="button"
@@ -913,7 +1539,7 @@ export function ArchMapApp() {
             {aiBusy ? "AI summaries…" : "Generate AI summaries"}
           </button>
         ) : null}
-        {repositoryId && rawGraph?.level === "file" ? (
+        {repositoryId && surface === "architecture" && rawGraph?.level === "file" ? (
           <button
             type="button"
             className="rounded border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
@@ -922,7 +1548,7 @@ export function ArchMapApp() {
             ← Module map
           </button>
         ) : null}
-        {repositoryId && rawGraph?.level === "module" ? (
+        {repositoryId && surface === "architecture" && rawGraph?.level === "module" ? (
           <button
             type="button"
             className="rounded border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
@@ -931,7 +1557,10 @@ export function ArchMapApp() {
             All files (module-clustered)
           </button>
         ) : null}
-        {repositoryId && rawGraph?.level === "module" && selectedModuleId ? (
+        {repositoryId &&
+        surface === "architecture" &&
+        rawGraph?.level === "module" &&
+        selectedModuleId ? (
           <button
             type="button"
             className="rounded border border-blue-300 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-900 hover:bg-blue-100"
@@ -958,17 +1587,130 @@ export function ArchMapApp() {
       ) : null}
 
       <div className="flex min-h-0 flex-1">
+        {repositoryId && surface === "routes" ? (
+          <div className="flex w-[min(22rem,42vw)] shrink-0 flex-col border-r border-zinc-200 bg-white">
+            <div className="border-b border-zinc-200 px-3 py-2">
+              <div className="text-sm font-semibold text-zinc-900">Pages</div>
+              <p className="mt-0.5 text-[11px] leading-snug text-zinc-500">
+                Folder tree of repo-relative paths. Expand folders to browse; use Details under a page
+                for full path and module. Select a page to graph first-party imports (depth below); expand
+                a file in the graph to pull in its direct imports.
+              </p>
+              <input
+                type="search"
+                className="mt-2 w-full rounded border border-zinc-300 px-2 py-1.5 text-xs"
+                placeholder="Filter by path…"
+                value={routePathFilter}
+                onChange={(e) => setRoutePathFilter(e.target.value)}
+              />
+            </div>
+            <div className="flex flex-col gap-2 border-b border-zinc-200 px-3 py-2">
+              <div className="flex items-center justify-between gap-2 text-xs text-zinc-600">
+                <span>Import depth</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    className="rounded border border-zinc-300 bg-white px-2 py-0.5 disabled:opacity-40"
+                    disabled={routeGlobalDepth <= 1}
+                    onClick={() => setRouteGlobalDepth((d) => Math.max(1, d - 1))}
+                  >
+                    −
+                  </button>
+                  <span className="min-w-[1.5rem] text-center font-mono">{routeGlobalDepth}</span>
+                  <button
+                    type="button"
+                    className="rounded border border-zinc-300 bg-white px-2 py-0.5 disabled:opacity-40"
+                    disabled={routeGlobalDepth >= 12}
+                    onClick={() => setRouteGlobalDepth((d) => Math.min(12, d + 1))}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-xs font-medium text-zinc-800 hover:bg-zinc-50 disabled:opacity-40"
+                disabled={!selectedFilePath || !selectedRoutePageAbs}
+                onClick={() => {
+                  if (!selectedFilePath) return;
+                  const k = filePathKey(selectedFilePath);
+                  setRouteExpandedAbs((prev) =>
+                    prev.some((p) => filePathKey(p) === k) ? prev : [...prev, selectedFilePath],
+                  );
+                }}
+              >
+                Expand imports from selected file
+              </button>
+              {routeExpandedAbs.length ? (
+                <button
+                  type="button"
+                  className="text-left text-[11px] text-zinc-500 underline hover:text-zinc-800"
+                  onClick={() => setRouteExpandedAbs([])}
+                >
+                  Clear file expansions
+                </button>
+              ) : null}
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-1 py-2">
+              {routesBusy ? (
+                <p className="px-2 text-xs text-zinc-500">Loading file graph…</p>
+              ) : routesLoadError ? (
+                <p className="px-2 text-xs text-red-700">{routesLoadError}</p>
+              ) : filteredRouteTree.length === 0 ? (
+                <p className="px-2 text-xs text-zinc-600">
+                  No <code className="rounded bg-zinc-100 px-0.5">page.*</code> or{" "}
+                  <code className="rounded bg-zinc-100 px-0.5">pages/</code> routes match this filter (or
+                  none exist in this snapshot).
+                </p>
+              ) : (
+                <div className="px-1">
+                  <RouteFolderTree
+                    nodes={filteredRouteTree}
+                    depth={0}
+                    selectedAbs={selectedRoutePageAbs}
+                    expandedPrefixes={routeDirExpanded}
+                    onToggleDir={toggleRouteDir}
+                    onSelectFile={setSelectedRoutePageAbs}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
         <div className="relative min-w-0 flex-1">
           <ReactFlowProvider>
             <ArchMapFlow
-              rawGraph={rawGraph}
-              violations={violations}
+              rawGraph={
+                surface === "routes"
+                  ? (routeDisplayGraph ?? {
+                      snapshotId: routesBaseline?.snapshotId ?? rawGraph?.snapshotId ?? "",
+                      level: "file",
+                      nodes: [],
+                      edges: [],
+                    })
+                  : rawGraph
+              }
+              violations={surface === "routes" ? [] : violations}
               edgeFilter={edgeFilter}
               selectedFilePath={selectedFilePath}
-              onNodeClick={onNodeClick}
-              onNodeDoubleClick={onNodeDoubleClick}
+              onNodeClick={surface === "routes" ? onRoutesNodeClick : onNodeClick}
+              onNodeDoubleClick={surface === "routes" ? () => {} : onNodeDoubleClick}
+              forceFlatFileLayout={surface === "routes"}
+              flatLayoutRootId={surface === "routes" ? selectedRoutePageAbs : null}
+              fitKeySuffix={routeFlowFitSuffix}
             />
           </ReactFlowProvider>
+          {surface === "routes" &&
+          !selectedRoutePageAbs &&
+          !routesBusy &&
+          routesBaseline &&
+          !routesLoadError ? (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-zinc-50/80">
+              <p className="max-w-sm rounded-lg border border-zinc-200 bg-white px-4 py-3 text-center text-sm text-zinc-600 shadow-sm">
+                Select a page on the left to show its dependency graph here.
+              </p>
+            </div>
+          ) : null}
         </div>
 
         <aside className="flex w-[380px] shrink-0 flex-col border-l border-zinc-200 bg-white">
