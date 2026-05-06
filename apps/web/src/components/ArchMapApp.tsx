@@ -421,6 +421,7 @@ function buildRouteFileSubgraph(
   globalDepth: number,
   expandedNodes: Set<string>,
 ): GraphResponse {
+  const isRouteDependencyEdge = (type?: string) => type === "import" || type === "api";
   const rootK = filePathKey(rootAbs);
   const idK = (id: string) => filePathKey(id);
   const nodeByKey = new Map<string, GraphNode>();
@@ -438,7 +439,7 @@ function buildRouteFileSubgraph(
   const allKeys = new Set(nodeByKey.keys());
   const outAdj = new Map<string, string[]>();
   for (const e of full.edges) {
-    if (e.type !== "import") continue;
+    if (!isRouteDependencyEdge(e.type)) continue;
     const s = idK(e.source);
     const t = idK(e.target);
     if (!allKeys.has(s) || !allKeys.has(t)) continue;
@@ -475,7 +476,7 @@ function buildRouteFileSubgraph(
   const nodes = full.nodes.filter((n) => visibleOrigIds.has(n.id));
   const nodeKeySet = new Set([...visible]);
   const edges = full.edges.filter((e) => {
-    if (e.type !== "import") return false;
+    if (!isRouteDependencyEdge(e.type)) return false;
     return nodeKeySet.has(idK(e.source)) && nodeKeySet.has(idK(e.target));
   });
   return {
@@ -541,7 +542,7 @@ function layoutFlatImportGraphFromRoot(
   }
 
   const ids = new Set(gn.map((n) => n.id));
-  const importEdges = edges.filter((e) => e.type === "import");
+  const importEdges = edges.filter((e) => e.type === "import" || e.type === "api");
   const outAdj = new Map<string, string[]>();
   for (const id of ids) outAdj.set(id, []);
   for (const e of importEdges) {
@@ -780,12 +781,14 @@ function FileTileNode({
   subtitle?: string;
   pathTitle?: string;
   risk?: "low" | "medium" | "high";
+  isApiDependencyNode?: boolean;
 }>) {
   return (
     <div
       className="relative rounded-lg border-2 bg-[#fafafa] px-1.5 py-1 shadow-sm"
       style={{
-        borderColor: riskColor(data.risk),
+        borderColor: data.isApiDependencyNode ? "#0f766e" : riskColor(data.risk),
+        background: data.isApiDependencyNode ? "#f0fdfa" : "#fafafa",
         maxWidth: FILE_CELL_W - 10,
       }}
     >
@@ -1062,6 +1065,12 @@ function ArchMapFlow({
     if (!rawGraph) return [] as Node[];
     const { nodes: gn, edges: ge } = rawGraph;
     const moduleCallSitePreview = rawGraph.moduleCallSitePreview;
+    const apiNodeIds = new Set<string>();
+    for (const edge of ge) {
+      if (edge.type !== "api") continue;
+      apiNodeIds.add(edge.source);
+      apiNodeIds.add(edge.target);
+    }
 
     let rfNodes: Node[];
     if (useFileGroups) {
@@ -1107,6 +1116,7 @@ function ArchMapFlow({
                 subtitle: n.relativeFilePath ? compactRepoPath(n.relativeFilePath) : undefined,
                 pathTitle: n.relativeFilePath?.replace(/\\/g, "/"),
                 risk: n.risk,
+                isApiDependencyNode: apiNodeIds.has(n.id),
               }
             : { label: n.name },
         style: isModuleGraph
@@ -1157,6 +1167,7 @@ function ArchMapFlow({
         const srcK = filePathKey(e.source);
         const tgtK = filePathKey(e.target);
         const isImport = e.type === "import";
+        const isApiDependency = e.type === "api";
         const touchesSelection =
           isFileLevel && sel && isImport && (srcK === sel || tgtK === sel);
         const isOutgoingFromSelection = isFileLevel && sel && srcK === sel && isImport;
@@ -1183,6 +1194,8 @@ function ArchMapFlow({
               ? {
                   color: isOutgoingFromSelection ? "#1d4ed8" : FILE_EDGE_STROKE,
                 }
+              : isApiDependency
+                ? { color: "#0f766e" }
               : {}),
           },
           ...(isFileLevel
@@ -1196,7 +1209,9 @@ function ArchMapFlow({
           zIndex: isFileLevel ? fileEdgeZ : touchesSelection ? 3 : undefined,
           style: isModuleGraph
             ? {
-                stroke: `rgba(71, 85, 105, ${0.3 + (e.evidenceDensity ?? 0) * 0.7})`,
+                stroke: isApiDependency
+                  ? `rgba(15, 118, 110, ${0.35 + (e.evidenceDensity ?? 0) * 0.65})`
+                  : `rgba(71, 85, 105, ${0.3 + (e.evidenceDensity ?? 0) * 0.7})`,
                 strokeWidth: 1 + (e.strength ?? 0) * 4,
               }
             : isFileLevel

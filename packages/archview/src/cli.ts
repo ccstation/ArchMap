@@ -79,6 +79,19 @@ function exitCodeForViolations(
   return snapshot.violations.length > 0 ? 1 : 0;
 }
 
+function countFileDependencyEdges(snapshot: Snapshot): {
+  importEdges: number;
+  apiEdges: number;
+} {
+  let importEdges = 0;
+  let apiEdges = 0;
+  for (const e of snapshot.fileDependencies) {
+    if (e.type === "import") importEdges += 1;
+    else if (e.type === "api") apiEdges += 1;
+  }
+  return { importEdges, apiEdges };
+}
+
 /** pnpm/npm sometimes forward a literal `--` before script args; Commander treats it as “operands only”. */
 function userArgsFromArgv(argv: string[]): string[] {
   const rest = argv.slice(2);
@@ -150,7 +163,13 @@ async function run(): Promise<void> {
   });
 
   writeSnapshot(snapshot, snapshotPath);
-  console.error(`[archview] Wrote snapshot (${snapshot.modules.length} modules, ${snapshot.moduleDependencies.length} edges, ${snapshot.violations.length} violations)`);
+  const { importEdges, apiEdges } = countFileDependencyEdges(snapshot);
+  console.error(
+    `[archview] Analysis complete — modules: ${snapshot.modules.length}, import edges: ${importEdges}, API edges: ${apiEdges}`,
+  );
+  console.error(
+    `[archview] Wrote snapshot (${snapshot.moduleDependencies.length} module edges, ${snapshot.violations.length} violations)`,
+  );
   console.error(`[archview] Snapshot file: ${snapshotPath}`);
 
   if (analyzeOnly) {

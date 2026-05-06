@@ -5,6 +5,7 @@ export const dependencyTypeSchema = z.enum([
   "route",
   "service",
   "event",
+  "api",
   "unknown",
 ]);
 
@@ -146,6 +147,9 @@ export const elementFlagsSchema = z.object({
   isFrameworkEntryPoint: z.boolean(),
   isGenerated: z.boolean(),
   isTestOnly: z.boolean(),
+  /** Next.js classification (optional; omitted for non-Next repos). */
+  isClientComponent: z.boolean().optional(),
+  isServerComponent: z.boolean().optional(),
 });
 
 export const elementMetricsSchema = z.object({

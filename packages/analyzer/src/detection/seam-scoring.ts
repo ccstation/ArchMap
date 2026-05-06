@@ -1,5 +1,12 @@
 import path from "node:path";
-import type { Element, ModuleDependency, Seam, SeamScore } from "@archmap/graph-model";
+import type {
+  DependencyType,
+  Element,
+  ModuleDependency,
+  Seam,
+  SeamScore,
+  SeamType,
+} from "@archmap/graph-model";
 import type { AnalysisThresholds } from "@archmap/graph-model";
 import { shortId } from "../ids.js";
 
@@ -26,7 +33,12 @@ function seamNoisePenalty(fromEls: Element[], toEls: Element[]): number {
 export function buildModuleDependenciesAndSeams(input: {
   repositoryId: string;
   rootPath: string;
-  internalEdges: { sourceFilePath: string; targetFilePath: string; importSpecifier: string }[];
+  internalEdges: {
+    sourceFilePath: string;
+    targetFilePath: string;
+    importSpecifier: string;
+    type: DependencyType;
+  }[];
   fileToModuleId: Map<string, string>;
   rootModuleId: string;
   elements: Element[];
@@ -57,7 +69,8 @@ export function buildModuleDependenciesAndSeams(input: {
     const tm = fileToModuleId.get(norm(e.targetFilePath));
     if (!sm || !tm || sm === tm) continue;
     if (sm === rootModuleId && tm === rootModuleId) continue;
-    const key = `${sm}|${tm}`;
+    const depType: DependencyType = e.type === "api" ? "api" : "import";
+    const key = `${sm}|${tm}|${depType}`;
     const cur = pairWeights.get(key) ?? {
       count: 0,
       examples: [],
@@ -80,17 +93,23 @@ export function buildModuleDependenciesAndSeams(input: {
   const seams: Seam[] = [];
 
   for (const [key, data] of pairWeights) {
-    const [sourceModuleId, targetModuleId] = key.split("|") as [string, string];
+    const [sourceModuleId, targetModuleId, depTypeRaw] = key.split("|") as [
+      string,
+      string,
+      string,
+    ];
+    const depType: DependencyType = depTypeRaw === "api" ? "api" : "import";
+    const seamType: SeamType = depType === "api" ? "api" : "import";
     const weight = data.count;
     const evidence = data.examples.map((ex) => ({
       sourceFilePath: ex.s,
       targetFilePath: ex.t,
     }));
     moduleDependencies.push({
-      id: shortId("mdep", [sourceModuleId, targetModuleId]),
+      id: shortId("mdep", [sourceModuleId, targetModuleId, depType]),
       sourceModuleId,
       targetModuleId,
-      type: "import",
+      type: depType,
       weight,
       evidenceCount: data.count,
       evidence,
@@ -158,11 +177,11 @@ export function buildModuleDependenciesAndSeams(input: {
       });
     }
     seams.push({
-      id: shortId("seam", [sourceModuleId, targetModuleId]),
+      id: shortId("seam", [sourceModuleId, targetModuleId, seamType]),
       repositoryId,
       fromModuleId: sourceModuleId,
       toModuleId: targetModuleId,
-      seamType: "import",
+      seamType,
       strength: seamScoreVal / 100,
       evidenceCount: data.count,
       confidence: seamScoreVal / 100,

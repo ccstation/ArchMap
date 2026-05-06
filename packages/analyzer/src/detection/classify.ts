@@ -69,6 +69,7 @@ export function computeElementFlags(
   sf: SourceFile,
   relPath: string,
   role: ArchitecturalRole,
+  framework: FrameworkInfo,
 ): Element["flags"] {
   const text = sf.getFullText();
   const hasNamedExport =
@@ -87,10 +88,20 @@ export function computeElementFlags(
     lower.includes("/.generated/") ||
     lower.endsWith(".gen.ts");
   const isFrameworkEntryPoint = role === "route" || role === "controller";
+  const inNextRouteTree =
+    (framework.hasAppRouter &&
+      (/(^|\/)app\//.test(lower) || /(^|\/)src\/app\//.test(lower))) ||
+    (framework.hasPagesRouter && /(^|\/)pages\//.test(lower));
+  const headerText = text.split(/\r?\n/).slice(0, 8).join("\n");
+  const hasUseClient = /(['"])use client\1;?/.test(headerText);
+  const isClientComponent = inNextRouteTree && hasUseClient;
+  const isServerComponent = inNextRouteTree && !hasUseClient;
   return {
     isPublicExport: hasNamedExport || hasDefault,
     isFrameworkEntryPoint,
     isGenerated,
     isTestOnly,
+    ...(isClientComponent ? { isClientComponent: true } : {}),
+    ...(isServerComponent ? { isServerComponent: true } : {}),
   };
 }
